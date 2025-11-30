@@ -1,0 +1,10 @@
+Version1
+DEFAULT PROMPTS with qwen 32b quantizzato a 4
+
+Version2
+DEFAULT PROMPT with qwen 32b quantizzato a 8
+
+Version3
+CWE focus prompt with qwen 32b quantizzato a 4
+
+

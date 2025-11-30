@@ -1,0 +1,13 @@
+different test with different type of context
+
+
+1. function + containers + all summaries
+
+2. function + container + all function/varuiables ecc ecc (code)
+
+3. function + container + function/variables from the file + summaries of other entities from the reported
+
+4. json record with all the informnations
+
+
+
