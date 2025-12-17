@@ -1,4 +1,4 @@
-# Semantic Vulnerability Detection (WIP)
+# Semantic Vulnerability Detection
 
 This repository contains **work in progress** on building an experimental infrastructure for **repository-level semantic vulnerability detection**, powered by **Large Language Models (LLMs)**.
 
