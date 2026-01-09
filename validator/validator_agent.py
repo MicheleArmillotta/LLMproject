@@ -6,7 +6,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 
 
-LLM_ENDPOINT = "http://192.168.17.95:21434/v1"
+LLM_ENDPOINT = ""
 
 #--------------------VALIDATOR AGENT---------------------------
 
