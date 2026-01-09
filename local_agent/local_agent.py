@@ -31,8 +31,7 @@ vulnerabiliry_file_write_lock = asyncio.Lock()
 provider = GoogleProvider(api_key='')
 model = GoogleModel('gemini-2.5-pro', provider=provider)
 
-#OpenAI_provider=OpenAIProvider(api_key='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')
-#openAI_model = OpenAIChatModel('gpt-5.1', provider = provider)
+
 
 #--------------------SUMMARY AGENT---------------------------
 
