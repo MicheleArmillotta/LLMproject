@@ -1,0 +1,56 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "recalc_intercepts",
+      "output_repos_c_ICV/CVE-2021-3656/repo/arch/x86/kvm/svm/nested.c",
+      "99-138"
+    ],
+    "function_name": "recalc_intercepts",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"svm.h\"\n#include \"x86.h\"\n#include \"mmu.h\"\n#include \"trace.h\"\n#include \"kvm_emulate.h\"\n#include <asm/msr-index.h>\n#include <linux/kernel.h>\n#include <linux/kvm_host.h>\n#include <linux/kvm_types.h>\n\nvoid recalc_intercepts(struct vcpu_svm *svm)\n{\n\tstruct vmcb_control_area *c, *h;\n\tstruct nested_state *g;\n\n\tmark_dirty(svm->vmcb, VMCB_INTERCEPTS);\n\n\tif (!is_guest_mode(&svm->vcpu))\n\t\treturn;\n\n\tc = &svm->vmcb->control;\n\th = &svm->nested.hsave->control;\n\tg = &svm->nested;\n\n\tc->intercept_cr = h->intercept_cr;\n\tc->intercept_dr = h->intercept_dr;\n\tc->intercept_exceptions = h->intercept_exceptions;\n\tc->intercept = h->intercept;\n\n\tif (svm->vcpu.arch.hflags & HF_VINTR_MASK) {\n\t\t/* We only want the cr8 intercept bits of L1 */\n\t\tc->intercept_cr &= ~(1U << INTERCEPT_CR8_READ);\n\t\tc->intercept_cr &= ~(1U << INTERCEPT_CR8_WRITE);\n\n\t\t/*\n\t\t * Once running L2 with HF_VINTR_MASK, EFLAGS.IF does not\n\t\t * affect any interrupt we may want to inject; therefore,\n\t\t * interrupt window vmexits are irrelevant to L0.\n\t\t */\n\t\tc->intercept &= ~(1ULL << INTERCEPT_VINTR);\n\t}\n\n\t/* We don't want to see VMMCALLs from a nested guest */\n\tc->intercept &= ~(1ULL << INTERCEPT_VMMCALL);\n\n\tc->intercept_cr |= g->intercept_cr;\n\tc->intercept_dr |= g->intercept_dr;\n\tc->intercept_exceptions |= g->intercept_exceptions;\n\tc->intercept |= g->intercept;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: is_guest_mode\nstatic inline bool is_guest_mode(struct kvm_vcpu *vcpu)\n{\n\treturn vcpu->arch.hflags & HF_GUEST_MASK;\n}\n\nCallee: mark_dirty\nstatic inline void mark_dirty(struct vmcb *vmcb, int bit)\n{\n\tvmcb->control.clean &= ~(1 << bit);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "recalc_intercepts: modification of vmcb control intercept fields",
+        "sink_description": "Updates the VMCB control-area intercept bitmasks (CR/DR accesses, exceptions, and various VMEXIT-intercept controls) for a nested guest, thereby defining which operations by L2 will cause traps to L1 or L0 and effectively shaping the access-control and isolation boundary between nested guests and the hypervisor.",
+        "required_conditions": [
+          {
+            "id": "only_in_guest_mode",
+            "description": "The function must only modify intercepts when the vCPU is currently running in nested guest mode, so that these changes apply to L2 and not to plain L1 execution.",
+            "locally_satisfied": true,
+            "justification": "The function checks is_guest_mode(&svm->vcpu) and returns early if false, so the intercept modifications are restricted to guest mode."
+          },
+          {
+            "id": "honor_L1_intercepts_as_base_policy",
+            "description": "The effective intercept configuration for L2 must start from L1’s saved intercepts (hsave->control) so that L1’s intended trapping/monitoring policy is preserved as the base, rather than replaced by an unrelated or weaker policy from L0.",
+            "locally_satisfied": true,
+            "justification": "The code copies h->intercept_* into c->intercept_* before applying any adjustments, ensuring L1’s intercepts are the baseline for L2."
+          },
+          {
+            "id": "preserve_required_L0_controls",
+            "description": "Any masking out of intercept bits (e.g., VMMCALL, VINTR, CR8 intercepts) must be limited to those that L0 explicitly intends to suppress; other intercepts that L0 relies on for isolation must remain enabled.",
+            "locally_satisfied": true,
+            "justification": "The function only clears specific, well-scoped bits (INTERCEPT_CR8_READ/WRITE, INTERCEPT_VINTR, INTERCEPT_VMMCALL) and leaves other intercepts inherited from h->intercept_* intact."
+          },
+          {
+            "id": "apply_L2_requested_intercepts_safely",
+            "description": "Additional intercepts requested via the nested_state (g->intercept_*) must only strengthen or refine trapping behavior and must not be allowed to disable mandatory traps required by L1 or L0 policy.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "nested_state_trustworthiness",
+            "description": "The nested_state structure (g) used to OR in additional intercepts must be derived from trusted/validated nested-VM control state, not directly from untrusted guest memory without prior verification.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "vmcb_mark_dirty_on_change",
+            "description": "Whenever the intercept configuration in the VMCB is modified, the corresponding clean bit must be cleared so that the hardware/host knows to reload the updated controls.",
+            "locally_satisfied": true,
+            "justification": "The function calls mark_dirty(svm->vmcb, VMCB_INTERCEPTS) before modifying any intercept fields, which clears the relevant clean bit."
+          }
+        ]
+      }
+    ]
+  }
+]

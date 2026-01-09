@@ -1,0 +1,50 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "recalc_intercepts",
+      "output_repos_c_ICV/CVE-2021-3656/repo/arch/x86/kvm/svm/nested.c",
+      "99-138"
+    ],
+    "function_name": "recalc_intercepts",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"svm.h\"\n#include \"x86.h\"\n#include \"mmu.h\"\n#include \"trace.h\"\n#include \"kvm_emulate.h\"\n#include <asm/msr-index.h>\n#include <linux/kernel.h>\n#include <linux/kvm_host.h>\n#include <linux/kvm_types.h>\n\nvoid recalc_intercepts(struct vcpu_svm *svm)\n{\n\tstruct vmcb_control_area *c, *h;\n\tstruct nested_state *g;\n\n\tmark_dirty(svm->vmcb, VMCB_INTERCEPTS);\n\n\tif (!is_guest_mode(&svm->vcpu))\n\t\treturn;\n\n\tc = &svm->vmcb->control;\n\th = &svm->nested.hsave->control;\n\tg = &svm->nested;\n\n\tc->intercept_cr = h->intercept_cr;\n\tc->intercept_dr = h->intercept_dr;\n\tc->intercept_exceptions = h->intercept_exceptions;\n\tc->intercept = h->intercept;\n\n\tif (svm->vcpu.arch.hflags & HF_VINTR_MASK) {\n\t\t/* We only want the cr8 intercept bits of L1 */\n\t\tc->intercept_cr &= ~(1U << INTERCEPT_CR8_READ);\n\t\tc->intercept_cr &= ~(1U << INTERCEPT_CR8_WRITE);\n\n\t\t/*\n\t\t * Once running L2 with HF_VINTR_MASK, EFLAGS.IF does not\n\t\t * affect any interrupt we may want to inject; therefore,\n\t\t * interrupt window vmexits are irrelevant to L0.\n\t\t */\n\t\tc->intercept &= ~(1ULL << INTERCEPT_VINTR);\n\t}\n\n\t/* We don't want to see VMMCALLs from a nested guest */\n\tc->intercept &= ~(1ULL << INTERCEPT_VMMCALL);\n\n\tc->intercept_cr |= g->intercept_cr;\n\tc->intercept_dr |= g->intercept_dr;\n\tc->intercept_exceptions |= g->intercept_exceptions;\n\tc->intercept |= g->intercept;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: is_guest_mode\nstatic inline bool is_guest_mode(struct kvm_vcpu *vcpu)\n{\n\treturn vcpu->arch.hflags & HF_GUEST_MASK;\n}\n\nCallee: mark_dirty\nstatic inline void mark_dirty(struct vmcb *vmcb, int bit)\n{\n\tvmcb->control.clean &= ~(1 << bit);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "recalc_intercepts: modify vmcb intercept fields",
+        "sink_description": "Adjusts the VMCB control-area intercept masks (CR, DR, exceptions, and general intercepts) that govern which nested-guest operations cause VM exits to higher privilege levels.",
+        "required_conditions": [
+          {
+            "id": "only_in_guest_mode",
+            "description": "Recalculation of nested intercepts must only occur when the vCPU is running in nested guest (L2) mode, not in L1 or L0 context.",
+            "locally_satisfied": true,
+            "justification": "The function checks is_guest_mode(&svm->vcpu) and returns immediately if it is false, so all subsequent intercept modifications are restricted to guest mode."
+          },
+          {
+            "id": "respect_l1_intercepts_as_base",
+            "description": "The nested guest’s intercept configuration should be derived from the L1 VMCB (hsave) as a baseline so that L0 does not accidentally drop required L1 intercepts.",
+            "locally_satisfied": true,
+            "justification": "The code initializes c->intercept_* by copying from h->intercept_* (L1’s hsave control area) before applying local adjustments."
+          },
+          {
+            "id": "mask_vintr_when_l0_controls_virtual_interrupts",
+            "description": "If L0 uses virtual interrupt masking (HF_VINTR_MASK set), intercepts must be adjusted so that L0, not L1, controls virtual interrupts for L2, and interrupt-window VM exits to L0 are disabled.",
+            "locally_satisfied": true,
+            "justification": "When HF_VINTR_MASK is set, the function clears only the CR8-related bits from c->intercept_cr and clears INTERCEPT_VINTR from c->intercept, aligning intercepts with L0’s virtual interrupt handling semantics."
+          },
+          {
+            "id": "prevent_l0_from_seeing_l2_vmmcalls",
+            "description": "L0 must not receive VMMCALL exits that logically belong to L1 when L2 executes VMMCALL; such calls should be handled by L1 or treated as non-exiting to L0.",
+            "locally_satisfied": true,
+            "justification": "The function unconditionally clears the INTERCEPT_VMMCALL bit from c->intercept, ensuring VMMCALLs from L2 do not cause vmexits to L0."
+          },
+          {
+            "id": "apply_l2_requested_intercepts_on_top_of_l1",
+            "description": "The nested guest’s own requested intercepts (stored in nested_state g) must be merged on top of the L1 baseline, without removing L1’s intercept requirements.",
+            "locally_satisfied": true,
+            "justification": "After copying L1’s intercepts and applying local masks, the function ORs in g->intercept_* into c->intercept_*, which can only add (not remove) intercepts relative to the current c values."
+          }
+        ]
+      }
+    ]
+  }
+]

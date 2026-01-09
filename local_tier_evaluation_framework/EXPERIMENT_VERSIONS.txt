@@ -8,3 +8,22 @@ Version3
 CWE focus prompt with qwen 32b quantizzato a 4
 
 
+Version 4
+first try with semantic reasoning patched version only tier 1
+
+
+Version 5 
+Semantic reasoning vulnerable version only tier 1
+
+
+Version 6
+Semantic reasoning vulnerable version only tier 1, New output model
+
+Version 7
+
+Semantic reasoning vulnerable version only tier 1, New output model, bug fixed, qwen 8 bit
+
+
+Version 9
+
+EXPERIMENT WITH THE FEW SHOT LEARNING EXAMPLE OF AUTHORIZATION_CHECK

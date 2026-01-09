@@ -1,0 +1,86 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "run",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2017-6200/repo/src/sandstorm/backup.c++",
+      "108-244"
+    ],
+    "function_name": "run",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <sys/capability.h>\n#include <sys/prctl.h>\n#include <sys/types.h>\n#include <sys/stat.h>\n#include <sys/syscall.h>\n#include <sys/mount.h>\n#include <sched.h>\n#include <kj/debug.h>\n#include \"version.h\"\n#include \"util.h\"\n#include \"backup.h\"\n\n#define PR_SET_NO_NEW_PRIVS 38\n\nBackupMain {\n  bool BackupMain::run(kj::StringPtr grainDir) {\n    // Enable no_new_privs so that once we drop privileges we can never regain them through e.g.\n    // execing a suid-root binary, as a backup measure. This is a backup measure in case someone\n    // finds an arbitrary code execution exploit in zip/unzip; it's not needed otherwise.\n    KJ_SYSCALL(prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));\n  \n    // Create files / directories before we potentially change the UID, so that they are created\n    // with the right owner.\n    if (restore) {\n      KJ_SYSCALL(mkdir(kj::str(grainDir, \"/sandbox\").cStr(), 0770));\n    } else if (filename != \"-\") {\n      // Instead of binding into mount tree later, just open the file and we'll compress to stdout.\n      KJ_SYSCALL(dup2(raiiOpen(filename, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC), STDOUT_FILENO));\n    }\n  \n    if (sandboxUid == nullptr) {\n      uid_t uid = getuid();\n      gid_t gid = getgid();\n  \n      KJ_SYSCALL(unshare(CLONE_NEWUSER | CLONE_NEWNS |\n          // Unshare other stuff; like no_new_privs, this is only to defend against hypothetical\n          // arbitrary code execution bugs in zip/unzip.\n          CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWPID | CLONE_NEWUTS));\n      writeSetgroupsIfPresent(\"deny\\n\");\n      writeUserNSMap(\"uid\", kj::str(\"1000 \", uid, \" 1\\n\"));\n      writeUserNSMap(\"gid\", kj::str(\"1000 \", gid, \" 1\\n\"));\n    } else {\n      KJ_SYSCALL(seteuid(0));\n      KJ_SYSCALL(unshare(CLONE_NEWNS |\n          // Unshare other stuff; like no_new_privs, this is only to defend against hypothetical\n          // arbitrary code execution bugs in zip/unzip.\n          CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWPID | CLONE_NEWUTS));\n    }\n  \n    // To really unshare the mount namespace, we also have to make sure all mounts are private.\n    // The parameters here were derived by strace'ing `mount --make-rprivate /`.  AFAICT the flags\n    // are undocumented.  :(\n    KJ_SYSCALL(mount(\"none\", \"/\", nullptr, MS_REC | MS_PRIVATE, nullptr));\n  \n    // Mount root read-only.\n    bind(kj::str(root, \"/\"), \"/tmp\", MS_BIND | MS_NOSUID | MS_RDONLY);\n  \n    if (access(\"/tmp/dev/null\", F_OK) != 0) {\n      // Looks like we need to bind in /dev.\n      KJ_SYSCALL(mount(\"/dev\", \"/tmp/dev\", nullptr, MS_BIND, nullptr));\n    }\n  \n    // Hide sensitive directories.\n    KJ_SYSCALL(mount(\"tmpfs\", \"/tmp/proc\", \"tmpfs\", 0, \"size=32k,nr_inodes=8,mode=000\"));\n    KJ_SYSCALL(mount(\"tmpfs\", \"/tmp/var\", \"tmpfs\", 0, \"size=32k,nr_inodes=8,mode=000\"));\n    KJ_SYSCALL(mount(\"tmpfs\", \"/tmp/etc\", \"tmpfs\", 0, \"size=32k,nr_inodes=8,mode=000\"));\n  \n    // Mount inner tmpfs.\n    KJ_SYSCALL(mount(\"tmpfs\", \"/tmp/tmp\", \"tmpfs\", 0, \"size=8m,nr_inodes=128,mode=777\"));\n  \n    // Bind in the grain's `data` (=`sandbox`).\n    KJ_SYSCALL(mkdir(\"/tmp/tmp/data\", 0777));\n    bind(kj::str(grainDir, \"/sandbox\"), \"/tmp/tmp/data\",\n         MS_NODEV | MS_NOSUID | MS_NOEXEC | (restore ? 0 : MS_RDONLY));\n  \n    // Bind in the grain's `log`. When restoring, we discard the log.\n    if (!restore) {\n      KJ_SYSCALL(mknod(\"/tmp/tmp/log\", S_IFREG | 0666, 0));\n      bind(kj::str(grainDir, \"/log\"), \"/tmp/tmp/log\", MS_RDONLY | MS_NOEXEC | MS_NOSUID | MS_NODEV);\n    }\n  \n    // Bind in the file.\n    if (restore) {\n      KJ_SYSCALL(mknod(\"/tmp/tmp/file.zip\", S_IFREG | 0666, 0));\n      KJ_SYSCALL(mount(filename.cStr(), \"/tmp/tmp/file.zip\", nullptr, MS_BIND, nullptr));\n    }\n  \n    // Use Andy's ridiculous pivot_root trick to place ourselves into the sandbox.\n    // See supervisor-main.c++ for more discussion.\n    {\n      auto oldRootDir = raiiOpen(\"/\", O_RDONLY | O_DIRECTORY | O_CLOEXEC);\n      KJ_SYSCALL(syscall(SYS_pivot_root, \"/tmp\", \"/tmp\"));\n      KJ_SYSCALL(fchdir(oldRootDir));\n      KJ_SYSCALL(umount2(\".\", MNT_DETACH));\n      KJ_SYSCALL(chdir(\"/tmp\"));\n    }\n  \n    KJ_IF_MAYBE(u, sandboxUid) {\n      KJ_SYSCALL(setresuid(*u, *u, *u));\n    }\n  \n    // TODO(security): We could seccomp this pretty tightly, but that would only be necessary to\n    //   defend against *both* zip/unzip *and* the Linux kernel having bugs at the same time. It's\n    //   fairly involved to set up, so maybe not worthwhile, unless we could factor the code out of\n    //   supervisor.c++...\n  \n    if (!restore) {\n      // Read stdin to metadata file.\n      kj::FdInputStream in(STDIN_FILENO);\n      kj::FdOutputStream out(raiiOpen(\"metadata\", O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC));\n      pump(in, out);\n    }\n  \n    {\n      // Drop crapabilities.\n      struct __user_cap_header_struct hdr;\n      struct __user_cap_data_struct data[2];\n      hdr.version = _LINUX_CAPABILITY_VERSION_3;\n      hdr.pid = 0;\n      memset(data, 0, sizeof(data));  // All capabilities disabled!\n      KJ_SYSCALL(capset(&hdr, data));\n      umask(0007);\n    }\n  \n    // TODO(someday): Find a zip library that doesn't suck and use it instead of shelling out\n    //   to zip/unzip.\n    if (restore) {\n      Subprocess({\"unzip\", \"-q\", \"file.zip\", \"data/*\", \"metadata\"}).waitForSuccess();\n  \n      // Read metadata file to stdout.\n      kj::FdInputStream in(raiiOpen(\"metadata\", O_RDONLY | O_CLOEXEC));\n      kj::FdOutputStream out(STDOUT_FILENO);\n      pump(in, out);\n    } else {\n      Subprocess::Options zipOptions({\"zip\", \"-qy@\", \"-\"});\n      auto inPipe = Pipe::make();\n      zipOptions.stdin = inPipe.readEnd;\n      Subprocess zip(kj::mv(zipOptions));\n      inPipe.readEnd = nullptr;\n  \n      {\n        kj::FdOutputStream out(kj::mv(inPipe.writeEnd));\n        for (auto& entry: listDirectory(\".\")) {\n          findFilesToZip(entry, out);\n        }\n      }\n  \n      zip.waitForSuccess();\n    }\n  \n    return true;\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: zip.waitForSuccess\nvoid Subprocess::waitForSuccess() {\n  int exitCode = waitForExit();\n  KJ_ASSERT(exitCode == 0, \"child process failed\", name, exitCode);\n}\n\nCallee: findFilesToZip\nbool BackupMain::findFilesToZip(kj::StringPtr path, kj::OutputStream& out) {\n  struct stat stats;\n  KJ_SYSCALL(lstat(path.cStr(), &stats));\n  if (S_ISREG(stats.st_mode) || S_ISLNK(stats.st_mode)) {\n    // Regular file or link can be zipped; write to file stream.\n    // If the path contains a newline, we cannot correctly pass it to `zip` since `zip` expects\n    // one file per line. For security reasons, we must detect and filter out these files.\n    // Hopefully this never happens legitimately?\n    if (path.findFirst('\\n') == nullptr) {\n      kj::ArrayPtr<const byte> pieces[2];\n      pieces[0] = path.asBytes();\n      pieces[1] = kj::StringPtr(\"\\n\").asBytes();\n      out.write(pieces);\n      return true;\n    } else {\n      KJ_LOG(ERROR, \"tried to backup file containing newlines\", path);\n      return false;\n    }\n  } else if (S_ISDIR(stats.st_mode)) {\n    // Subdirectory; enumerate contents.\n    bool packedAny = false;\n    for (auto& entry: listDirectory(path)) {\n      if (findFilesToZip(kj::str(path, '/', entry), out)) {\n        packedAny = true;\n      }\n    }\n\n    if (!packedAny) {\n      // Empty directory. Need to make sure it gets into the zip.\n      kj::ArrayPtr<const byte> pieces[2];\n      pieces[0] = path.asBytes();\n      pieces[1] = kj::StringPtr(\"\\n\").asBytes();\n      out.write(pieces);\n    }\n    return true;\n  } else {\n    return false;\n  }\n}\n\nCallee: listDirectory\nkj::Array<kj::String> listDirectoryFd(int dirfd) {\n  // We can't actually use `dirfd` directly because we'd mess up the seek state and because\n  // closedir() unfortunately always closes the FD even if opened with fdopendir(). So instead\n  // we delegate to listDirectoryAt() which will open a new FD.\n  return listDirectoryAt(dirfd, \".\");\n}\n\nCallee: Pipe::make\nPipe Pipe::makeTwoWayAsync() {\n  int fds[2];\n  KJ_SYSCALL(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, fds));\n  return { kj::AutoCloseFd(fds[0]), kj::AutoCloseFd(fds[1]) };\n}\n\nCallee: pump\nvoid BackupMain::pump(kj::InputStream& in, kj::OutputStream& out) {\n  byte buffer[4096];\n  while (size_t n = in.tryRead(buffer, 1, sizeof(buffer))) {\n    out.write(buffer, n);\n  }\n}\n\nCallee: Subprocess\nvoid detach() {\n    // Indicates that you don't intend to wait for this process to complete and do not want it to\n    // be killed when the Subprocess object is destroyed. The parent process needs a wait loop\n    // somewhere to clean up zombies.\n\n    pid = 0;\n  }\n\nCallee: Subprocess\nvoid notifyExited(int status) {\n    // Call if you receive exit notification from elsewhere, e.g. calling wait() yourself. It is\n    // NECESSARY to call this immediately upon receiving an exit notification, otherwise the\n    // destructor will try to SIGKILL the pid which might have been re-assigned by then.\n    //\n    // TODO(cleanup): Build a safer API to allow waiting on a group of subprocesses, or using\n    //   async I/O.\n\n    pid = 0;\n  }\n\nCallee: bind\nvoid BackupMain::bind(kj::StringPtr src, kj::StringPtr dst, unsigned long flags) {\n  // Contrary to the documentation of MS_BIND claiming this is no longer the case after 2.6.26,\n  // mountflags are ignored on the initial bind.  We have to issue a subsequent remount to set\n  // them.\n  KJ_SYSCALL(mount(src.cStr(), dst.cStr(), nullptr, MS_BIND | MS_REC, nullptr), src, dst);\n  KJ_SYSCALL(mount(src.cStr(), dst.cStr(), nullptr,\n                   MS_BIND | MS_REC | MS_REMOUNT | flags, nullptr),\n      src, dst);\n}\n\nCallee: writeUserNSMap\nvoid BackupMain::writeUserNSMap(const char *type, kj::StringPtr contents) {\n  kj::FdOutputStream(raiiOpen(kj::str(\"/proc/self/\", type, \"_map\").cStr(), O_WRONLY | O_CLOEXEC))\n      .write(contents.begin(), contents.size());\n}\n\nCallee: writeSetgroupsIfPresent\nvoid BackupMain::writeSetgroupsIfPresent(const char *contents) {\n  KJ_IF_MAYBE(fd, raiiOpenIfExists(\"/proc/self/setgroups\", O_WRONLY | O_CLOEXEC)) {\n    kj::FdOutputStream(kj::mv(*fd)).write(contents, strlen(contents));\n  }\n}\n",
+    "sinks": [
+      {
+        "sink_id": "pump(in, out) when !restore (stdin → metadata file inside sandbox)",
+        "sink_description": "Copies all data from standard input into a metadata file within the sandbox, which is later included in the backup zip stream written to stdout.",
+        "required_conditions": [
+          {
+            "id": "stdin_contents_non_sensitive_or_intended",
+            "description": "Only data that the caller explicitly intends to back up should be sent via stdin, and it must not contain sensitive information that should not be stored or transmitted in the resulting backup.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "sandbox_fs_isolated",
+            "description": "The metadata file path (\"metadata\") must reside in an isolated sandbox filesystem so that writing it does not overwrite or expose unrelated host files.",
+            "locally_satisfied": true,
+            "justification": "Before writing \"metadata\", the code constructs a new mount namespace, binds a tmpfs at /tmp/tmp, pivot_root()s into /tmp, and chdirs into /tmp, so the subsequent relative path \"metadata\" is in the sandboxed root, not the host filesystem."
+          }
+        ]
+      },
+      {
+        "sink_id": "pump(in, out) when restore (metadata file → stdout)",
+        "sink_description": "Reads the metadata file from the sandbox and writes it directly to standard output, exposing its entire contents to the caller or downstream consumer.",
+        "required_conditions": [
+          {
+            "id": "metadata_non_sensitive_or_intended",
+            "description": "The metadata file must not contain sensitive information except what the caller expects and is authorized to receive on stdout.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "metadata_origin_controlled",
+            "description": "The metadata file should be created only by the trusted backup process and not be replaceable by untrusted data that could leak other information when echoed to stdout.",
+            "locally_satisfied": true,
+            "justification": "The sandbox root is constructed via new mount + pivot_root; within this environment, the code itself creates and fills \"metadata\" before later reading it, so the file’s origin is controlled by this component."
+          }
+        ]
+      },
+      {
+        "sink_id": "Subprocess({\"unzip\", ...}).waitForSuccess() and Subprocess zip(...).waitForSuccess()",
+        "sink_description": "Executes external programs (zip/unzip) which process files from the sandboxed filesystem and may read, compress, or restore their contents, indirectly exposing those contents into backup archives or restored trees.",
+        "required_conditions": [
+          {
+            "id": "filesystem_scope_limited",
+            "description": "The filesystem visible to zip/unzip must be constrained to the intended sandbox so they cannot read arbitrary host files and include or act on their contents.",
+            "locally_satisfied": true,
+            "justification": "Before running zip/unzip, the code unshares user/mount namespaces, remounts / as private, mounts a new tmpfs subtree under /tmp, bind-mounts only selected grain paths and tmpfs directories, then pivot_root()s into /tmp, restricting their view to the sandbox."
+          },
+          {
+            "id": "stdout_stdin_channels_intended",
+            "description": "Data flowing between this process and zip/unzip via stdin/stdout must consist only of information that the caller intends to archive or restore.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "findFilesToZip(path, out): writing file and directory paths to zip stdin",
+        "sink_description": "Enumerates files and directories in the current sandbox and writes their paths to the zip process via its stdin, determining which filesystem entries will be included in the backup archive.",
+        "required_conditions": [
+          {
+            "id": "directory_tree_intended",
+            "description": "The current working directory and subdirectories enumerated by listDirectory(\".\") must correspond only to the grain’s data and not to unrelated or sensitive host directories.",
+            "locally_satisfied": true,
+            "justification": "Prior to calling findFilesToZip(), the code has pivot_root()ed into /tmp and constructed the sandboxed layout there, so listDirectory(\".\") operates within that constrained environment."
+          },
+          {
+            "id": "path_sanitization_for_control_channel",
+            "description": "Paths sent to zip over stdin must be formatted so that they cannot be interpreted as multiple entries or control sequences that could cause unintended inclusion of files.",
+            "locally_satisfied": true,
+            "justification": "findFilesToZip explicitly filters out any path containing a newline and logs an error instead; accepted paths are written as the raw path plus a single trailing newline, matching zip’s expected format."
+          }
+        ]
+      }
+    ]
+  }
+]

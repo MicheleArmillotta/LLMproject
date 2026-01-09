@@ -1,0 +1,68 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "Bind",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2018-1281/repo/src/zmq_van.h",
+      "61-79"
+    ],
+    "function_name": "Bind",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ps/internal/van.h\"\n#include <string>\n#include <thread>\n#include <stdlib.h>\n#include <zmq.h>\n\nZMQVan {\n  int Bind(const Node& node, int max_retry) override {\n      receiver_ = zmq_socket(context_, ZMQ_ROUTER);\n      CHECK(receiver_ != NULL)\n          << \"create receiver socket failed: \" << zmq_strerror(errno);\n      int local = GetEnv(\"DMLC_LOCAL\", 0);\n      std::string addr = local ? \"ipc:///tmp/\" : \"tcp://*:\";\n      int port = node.port;\n      unsigned seed = static_cast<unsigned>(time(NULL)+port);\n      for (int i = 0; i < max_retry+1; ++i) {\n        auto address = addr + std::to_string(port);\n        if (zmq_bind(receiver_, address.c_str()) == 0) break;\n        if (i == max_retry) {\n          port = -1;\n        } else {\n          port = 10000 + rand_r(&seed) % 40000;\n        }\n      }\n      return port;\n    }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": [
+      {
+        "sink_id": "return port;",
+        "sink_description": "Returns the final bound port number (or -1 on failure) to the caller after attempting to bind a ZMQ ROUTER socket, potentially exposing which port is in use and whether binding was successful.",
+        "required_conditions": [
+          {
+            "id": "caller_must_be_authorized_to_learn_bind_port",
+            "description": "Only authorized callers should be able to learn which port this service has successfully bound to.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "port_value_not_sensitive",
+            "description": "The returned port number must not itself be considered sensitive information in the deployment context.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "CHECK(receiver_ != NULL) << \"create receiver socket failed: \" << zmq_strerror(errno);",
+        "sink_description": "Logs detailed ZeroMQ error message derived from zmq_strerror(errno) when socket creation fails.",
+        "required_conditions": [
+          {
+            "id": "error_message_not_exposed_to_untrusted_actors",
+            "description": "Detailed error logs (including zmq_strerror output) must not be directly exposed to untrusted or remote actors.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "error_message_free_of_sensitive_config",
+            "description": "The error string returned by zmq_strerror(errno) and the accompanying text must not include sensitive configuration values (e.g., secrets, internal paths).",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "use of address string in zmq_bind(receiver_, address.c_str())",
+        "sink_description": "Constructs and uses an IPC or TCP bind address based on environment (DMLC_LOCAL) and the requested port, potentially revealing local IPC path (/tmp) or open TCP port if communicated elsewhere.",
+        "required_conditions": [
+          {
+            "id": "bind_address_not_disclosed_to_untrusted_parties",
+            "description": "Any IPC path or TCP bind address derived here should not be disclosed to unauthorized users or external systems unless necessary.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "DMLC_LOCAL_env_var_not_controlled_by_untrusted_party_for_info_leak",
+            "description": "The DMLC_LOCAL environment variable should not be attacker-controlled in a way that causes creation of unintended IPC endpoints that may later be disclosed.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

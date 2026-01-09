@@ -1,0 +1,13 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "UpdateFromUTF8",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2015-8790/repo/src/EbmlUnicodeString.cpp",
+      "156-196"
+    ],
+    "function_name": "UpdateFromUTF8",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ebml/EbmlUnicodeString.h\"\n#include <wchar.h>\n#include <cassert>\n\nUTFstring {\n  void UTFstring::UpdateFromUTF8()\n  {\n    delete [] _Data;\n    // find the size of the final UCS-2 string\n    size_t i;\n    const size_t SrcLength = UTF8string.length();\n    for (_Length=0, i=0; i<SrcLength; _Length++) {\n      const unsigned int CharLength = UTFCharLength(static_cast<uint8>(UTF8string[i]));\n      if ((CharLength >= 1) && (CharLength <= 4))\n        i += CharLength;\n      else\n        // Invalid size?\n        break;\n    }\n    _Data = new wchar_t[_Length+1];\n    size_t j;\n    for (j=0, i=0; i<SrcLength; j++) {\n      const uint8 lead              = static_cast<uint8>(UTF8string[i]);\n      const unsigned int CharLength = UTFCharLength(lead);\n      if ((CharLength < 1) || (CharLength > 4))\n        // Invalid char?\n        break;\n  \n      if ((i + CharLength) > SrcLength)\n        // Guard against invalid memory access beyond the end of the\n        // source buffer.\n        break;\n  \n      if (CharLength == 1)\n        _Data[j] = lead;\n      else if (CharLength == 2)\n        _Data[j] = ((lead & 0x1F) << 6) + (UTF8string[i+1] & 0x3F);\n      else if (CharLength == 3)\n        _Data[j] = ((lead & 0x0F) << 12) + ((UTF8string[i+1] & 0x3F) << 6) + (UTF8string[i+2] & 0x3F);\n      else if (CharLength == 4)\n        _Data[j] = ((lead & 0x07) << 18) + ((UTF8string[i+1] & 0x3F) << 12) + ((UTF8string[i+2] & 0x3F) << 6) + (UTF8string[i+3] & 0x3F);\n  \n      i += CharLength;\n    }\n    _Data[j] = 0;\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: UTFCharLength\nSTART_LIBEBML_NAMESPACE\n\n// ===================== UTFstring class ===================\n\nstatic unsigned int UTFCharLength(uint8 lead)\n{\n  if (lead < 0x80)\n    return 1;\n  else if ((lead >> 5) == 0x6)\n    return 2;\n  else if ((lead >> 4) == 0xe)\n    return 3;\n  else if ((lead >> 3) == 0x1e)\n    return 4;\n  else\n    // Invalid size?\n    return 0;\n}\n",
+    "sinks": []
+  }
+]

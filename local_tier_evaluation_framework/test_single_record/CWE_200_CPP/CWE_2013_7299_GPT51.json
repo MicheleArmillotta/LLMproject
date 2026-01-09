@@ -1,0 +1,50 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "state_fieldbody_crlf",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2013-7299/repo/framework/common/messageheaderparser.cpp",
+      "190-235"
+    ],
+    "function_name": "state_fieldbody_crlf",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <cxxtools/log.h>\n#include <cctype>\n#include <tnt/http.h>\n#include <tnt/httperror.h>\n#include <tnt/messageheaderparser.h>\n\nMessageheader {\n  Parser {\n    bool Messageheader::Parser::state_fieldbody_crlf(char ch)\n      {\n        if (ch == '\\r')\n          SET_STATE(state_end_cr);\n        else if (ch == '\\n')\n        {\n          log_debug(\"header \" << fieldnamePtr << \": \" << fieldbodyPtr);\n          switch (header.onField(fieldnamePtr, fieldbodyPtr))\n          {\n            case OK:\n            case END:  return true;\n                       break;\n            case FAIL: failedFlag = true;\n                       log_warn(\"invalid character \" << chartoprint(ch) << \" in fieldbody\");\n                       break;\n          }\n    \n          return true;\n        }\n        else if (std::isspace(ch))\n        {\n          // continuation line\n          checkHeaderspace(1);\n          *(headerdataPtr - 1) = '\\n';\n          *headerdataPtr++ = ch;\n          SET_STATE(state_fieldbody);\n        }\n        else if (ch >= 33 && ch <= 126)\n        {\n          switch (header.onField(fieldnamePtr, fieldbodyPtr))\n          {\n            case OK:   SET_STATE(state_fieldname);\n                       break;\n            case FAIL: failedFlag = true;\n                       log_warn(\"invalid character \" << chartoprint(ch) << \" in fieldbody\");\n                       break;\n            case END:  return true;\n                       break;\n          }\n    \n          fieldnamePtr = headerdataPtr;\n          checkHeaderspace(1);\n          *headerdataPtr++ = ch;\n        }\n        return false;\n      }\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: checkHeaderspace\nvoid Messageheader::Parser::checkHeaderspace(unsigned chars) const\n  {\n    if (headerdataPtr + chars >= header.rawdata + sizeof(header.rawdata))\n      throw HttpError(HTTP_REQUEST_ENTITY_TOO_LARGE, \"header too large\");\n  }\n\nCallee: chartoprint\nstd::string chartoprint(char ch)\n    {\n      const static char hex[] = \"0123456789abcdef\";\n      if (std::isprint(ch))\n        return std::string(1, '\\'') + ch + '\\'';\n      else\n        return std::string(\"'\\\\x\") + hex[ch >> 4] + hex[ch & 0xf] + '\\'';\n    }\n\nCallee: header.onField\nPartheader::return_type Partheader::onField(const char* name,\n    const char* value)\n  {\n    if (tnt::StringCompareIgnoreCase<const char*>(name, \"Content-Disposition:\") == 0)\n    {\n      std::istringstream in(value);\n      in >> cd;\n      if (!in)\n        return FAIL;\n    }\n\n    return Messageheader::onField(name, value);\n  }\n",
+    "sinks": [
+      {
+        "sink_id": "log_debug_header_field",
+        "sink_description": "Debug logging of parsed header field name and value: log_debug(\"header \" << fieldnamePtr << \": \" << fieldbodyPtr);",
+        "required_conditions": [
+          {
+            "id": "header_value_not_sensitive",
+            "description": "Header field values that may contain sensitive information (e.g., authentication tokens, cookies, personal data) must not be logged in debug output, or must be sanitized before logging.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "debug_log_not_exposed_to_untrusted",
+            "description": "Debug logs must only be accessible to trusted operators and not exposed to untrusted users or remote clients.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "log_warn_invalid_character",
+        "sink_description": "Warning logging including a printable representation of the offending character in the header field body: log_warn(\"invalid character \" << chartoprint(ch) << \" in fieldbody\");",
+        "required_conditions": [
+          {
+            "id": "offending_char_not_sensitive_payload",
+            "description": "The offending character representation must not include or reveal sensitive header contents beyond what is necessary to diagnose the error.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "warning_log_not_exposed_to_untrusted",
+            "description": "Warning logs must only be accessible to trusted operators and not exposed to untrusted users or remote clients.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

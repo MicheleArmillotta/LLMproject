@@ -1,0 +1,56 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "http_RecvPostMessage",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2016-6255/repo/upnp/src/genlib/net/http/webserver.c",
+      "1346-1464"
+    ],
+    "function_name": "http_RecvPostMessage",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <sys/stat.h>\n#include <fcntl.h>\n#include <assert.h>\n#include \"VirtualDir.h\"\n#include \"upnputil.h\"\n#include \"UpnpStdInt.h\"\n#include \"UpnpIntTypes.h\"\n#include \"upnpapi.h\"\n#include \"upnp.h\"\n#include \"unixutil.h\"\n#include \"strintmap.h\"\n#include \"statcodes.h\"\n#include \"ssdplib.h\"\n#include \"membuffer.h\"\n#include \"ithread.h\"\n#include \"httpreadwrite.h\"\n#include \"httpparser.h\"\n#include \"FileInfo.h\"\n#include \"webserver.h\"\n#include \"config.h\"\n\nstatic int http_RecvPostMessage(\n\t/*! HTTP Parser object. */\n\thttp_parser_t *parser,\n\t/*! [in] Socket Information object. */\n\tSOCKINFO *info,\n\t/*! File where received data is copied to. */\n\tchar *filename,\n\t/*! Send Instruction object which gives information whether the file\n\t * is a virtual file or not. */\n\tstruct SendInstruction *Instr)\n{\n\tsize_t Data_Buf_Size = 1024;\n\tchar Buf[1024];\n\tint Timeout = -1;\n\tFILE *Fp;\n\tparse_status_t status = PARSE_OK;\n\tint ok_on_close = FALSE;\n\tsize_t entity_offset = 0;\n\tint num_read = 0;\n\tint ret_code = HTTP_OK;\n\n\tif (Instr && Instr->IsVirtualFile) {\n\t\tFp = (virtualDirCallback.open) (filename, UPNP_WRITE);\n\t\tif (Fp == NULL)\n\t\t\treturn HTTP_INTERNAL_SERVER_ERROR;\n\t} else {\n\t\tFp = fopen(filename, \"wb\");\n\t\tif (Fp == NULL)\n\t\t\treturn HTTP_UNAUTHORIZED;\n\t}\n\tparser->position = POS_ENTITY;\n\tdo {\n\t\t/* first parse what has already been gotten */\n\t\tif (parser->position != POS_COMPLETE)\n\t\t\tstatus = parser_parse_entity(parser);\n\t\tif (status == PARSE_INCOMPLETE_ENTITY) {\n\t\t\t/* read until close */\n\t\t\tok_on_close = TRUE;\n\t\t} else if ((status != PARSE_SUCCESS)\n\t\t\t   && (status != PARSE_CONTINUE_1)\n\t\t\t   && (status != PARSE_INCOMPLETE)) {\n\t\t\t/* error */\n\t\t\tret_code = HTTP_BAD_REQUEST;\n\t\t\tgoto ExitFunction;\n\t\t}\n\t\t/* read more if necessary entity */\n\t\twhile (entity_offset + Data_Buf_Size > parser->msg.entity.length &&\n\t\t       parser->position != POS_COMPLETE) {\n\t\t\tnum_read = sock_read(info, Buf, sizeof(Buf), &Timeout);\n\t\t\tif (num_read > 0) {\n\t\t\t\t/* append data to buffer */\n\t\t\t\tif (membuffer_append(&parser->msg.msg,\n\t\t\t\t\tBuf, (size_t)num_read) != 0) {\n\t\t\t\t\t/* set failure status */\n\t\t\t\t\tparser->http_error_code =\n\t\t\t\t\t    HTTP_INTERNAL_SERVER_ERROR;\n\t\t\t\t\tret_code = HTTP_INTERNAL_SERVER_ERROR;\n\t\t\t\t\tgoto ExitFunction;\n\t\t\t\t}\n\t\t\t\tstatus = parser_parse_entity(parser);\n\t\t\t\tif (status == PARSE_INCOMPLETE_ENTITY) {\n\t\t\t\t\t/* read until close */\n\t\t\t\t\tok_on_close = TRUE;\n\t\t\t\t} else if ((status != PARSE_SUCCESS)\n\t\t\t\t\t   && (status != PARSE_CONTINUE_1)\n\t\t\t\t\t   && (status != PARSE_INCOMPLETE)) {\n\t\t\t\t\tret_code = HTTP_BAD_REQUEST;\n\t\t\t\t\tgoto ExitFunction;\n\t\t\t\t}\n\t\t\t} else if (num_read == 0) {\n\t\t\t\tif (ok_on_close) {\n\t\t\t\t\tUpnpPrintf(UPNP_INFO, HTTP, __FILE__, __LINE__,\n\t\t\t\t\t\t\"<<< (RECVD) <<<\\n%s\\n-----------------\\n\",\n\t\t\t\t\t\tparser->msg.msg.buf);\n\t\t\t\t\tprint_http_headers(&parser->msg);\n\t\t\t\t\tparser->position = POS_COMPLETE;\n\t\t\t\t} else {\n\t\t\t\t\t/* partial msg or response */\n\t\t\t\t\tparser->http_error_code = HTTP_BAD_REQUEST;\n\t\t\t\t\tret_code = HTTP_BAD_REQUEST;\n\t\t\t\t\tgoto ExitFunction;\n\t\t\t\t}\n\t\t\t} else {\n\t\t\t\tret_code = HTTP_SERVICE_UNAVAILABLE;\n\t\t\t\tgoto ExitFunction;\n\t\t\t}\n\t\t}\n\t\tif ((entity_offset + Data_Buf_Size) > parser->msg.entity.length) {\n\t\t\tData_Buf_Size =\n\t\t\t    parser->msg.entity.length - entity_offset;\n\t\t}\n\t\tmemcpy(Buf,\n\t\t       &parser->msg.msg.buf[parser->entity_start_position + entity_offset],\n\t\t       Data_Buf_Size);\n\t\tentity_offset += Data_Buf_Size;\n\t\tif (Instr && Instr->IsVirtualFile) {\n\t\t\tint n = virtualDirCallback.write(Fp, Buf, Data_Buf_Size);\n\t\t\tif (n < 0) {\n\t\t\t\tret_code = HTTP_INTERNAL_SERVER_ERROR;\n\t\t\t\tgoto ExitFunction;\n\t\t\t}\n\t\t} else {\n\t\t\tsize_t n = fwrite(Buf, 1, Data_Buf_Size, Fp);\n\t\t\tif (n != Data_Buf_Size) {\n\t\t\t\tret_code = HTTP_INTERNAL_SERVER_ERROR;\n\t\t\t\tgoto ExitFunction;\n\t\t\t}\n\t\t}\n\t} while (parser->position != POS_COMPLETE ||\n\t\t entity_offset != parser->msg.entity.length);\nExitFunction:\n\tif (Instr && Instr->IsVirtualFile) {\n\t\tvirtualDirCallback.close(Fp);\n\t} else {\n\t\tfclose(Fp);\n\t}\n\n\treturn ret_code;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: memcpy\nstatic void\nMD5_memcpy(POINTER  output, POINTER  input, unsigned int len)\n{\n\tunsigned int i;\n\tfor (i = 0; i < len; ++i) {\n\t\toutput[i] = input[i];\n\t}\n}\n\nCallee: print_http_headers\nvoid print_http_headers(http_message_t *hmsg)\n{\n    ListNode *node;\n    /* NNS:  dlist_node *node; */\n    http_header_t *header;\n\n    /* print start line */\n    if( hmsg->is_request ) {\n        printf( \"method = %d, version = %d.%d, url = %.*s\\n\", \n            hmsg->method, hmsg->major_version, hmsg->minor_version,\n            (int)hmsg->uri.pathquery.size, hmsg->uri.pathquery.buff);\n    } else {\n        printf( \"resp status = %d, version = %d.%d, status msg = %.*s\\n\",\n            hmsg->status_code, hmsg->major_version, hmsg->minor_version,\n            (int)hmsg->status_msg.length, hmsg->status_msg.buf);\n    }\n\n    /* print headers */\n    node = ListHead( &hmsg->headers );\n    /* NNS: node = dlist_first_node( &hmsg->headers ); */\n    while( node != NULL ) {\n        header = ( http_header_t * ) node->item;\n        /* NNS: header = (http_header_t *)node->data; */\n        printf( \"hdr name: %.*s, value: %.*s\\n\", \n            (int)header->name.length, header->name.buf,\n            (int)header->value.length, header->value.buf );\n\n        node = ListNext( &hmsg->headers, node );\n        /* NNS: node = dlist_next( &hmsg->headers, node ); */\n    }\n}\n\nCallee: UpnpPrintf\nvoid UpnpPrintf(Upnp_LogLevel DLevel,\n\t\tDbg_Module Module,\n\t\tconst char *DbgFileName, int DbgLineNo, const char *FmtStr, ...)\n{\n\tva_list ArgList;\n\n\tif (!DebugAtThisLevel(DLevel, Module))\n\t\treturn;\n\tithread_mutex_lock(&GlobalDebugMutex);\n\tva_start(ArgList, FmtStr);\n\tif (!DEBUG_TARGET) {\n\t\tif (DbgFileName)\n\t\t\tUpnpDisplayFileAndLine(stdout, DbgFileName, DbgLineNo);\n\t\tvfprintf(stdout, FmtStr, ArgList);\n\t\tfflush(stdout);\n\t} else if (DLevel == 0) {\n\t\tif (DbgFileName)\n\t\t\tUpnpDisplayFileAndLine(ErrFileHnd, DbgFileName,\n\t\t\t\t\t       DbgLineNo);\n\t\tvfprintf(ErrFileHnd, FmtStr, ArgList);\n\t\tfflush(ErrFileHnd);\n\t} else {\n\t\tif (DbgFileName)\n\t\t\tUpnpDisplayFileAndLine(InfoFileHnd, DbgFileName,\n\t\t\t\t\t       DbgLineNo);\n\t\tvfprintf(InfoFileHnd, FmtStr, ArgList);\n\t\tfflush(InfoFileHnd);\n\t}\n\tva_end(ArgList);\n\tithread_mutex_unlock(&GlobalDebugMutex);\n}\n\nCallee: parser_parse_entity\nUPNP_INLINE parse_status_t\nparser_parse_entity( INOUT http_parser_t * parser )\n{\n    parse_status_t status;\n\n    assert( parser->position == POS_ENTITY );\n\n    do {\n        switch ( parser->ent_position ) {\n            case ENTREAD_USING_CLEN:\n                status = parser_parse_entity_using_clen( parser );\n                break;\n\n            case ENTREAD_USING_CHUNKED:\n                status = parser_parse_chunky_entity( parser );\n                break;\n\n            case ENTREAD_CHUNKY_BODY:\n                status = parser_parse_chunky_body( parser );\n                break;\n\n            case ENTREAD_CHUNKY_HEADERS:\n                status = parser_parse_chunky_headers( parser );\n                break;\n\n            case ENTREAD_UNTIL_CLOSE:\n                status = parser_parse_entity_until_close( parser );\n                break;\n\n            case ENTREAD_DETERMINE_READ_METHOD:\n                status = parser_get_entity_read_method( parser );\n                break;\n\n            default:\n\t\tstatus = PARSE_FAILURE;\n                assert( 0 );\n        }\n\n    } while( status == ( parse_status_t ) PARSE_CONTINUE_1 );\n\n    return status;\n}\n\nCallee: membuffer_append\nint membuffer_append(membuffer *m, const void *buf, size_t buf_len)\n{\n\tassert(m != NULL);\n\n\treturn membuffer_insert(m, buf, buf_len, m->length);\n}\n\nCallee: sock_read\nint sock_read(SOCKINFO *info, char *buffer, size_t bufsize, int *timeoutSecs)\n{\n\treturn sock_read_write(info, buffer, bufsize, timeoutSecs, TRUE);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "Fp = fopen(filename, \"wb\");",
+        "sink_description": "Opens a filesystem path for writing to store the HTTP request body, potentially creating or truncating a file based on a caller-controlled filename.",
+        "required_conditions": [
+          {
+            "id": "filename_authorized_for_write",
+            "description": "The caller associated with this HTTP request must be authorized to create or overwrite the target file specified by 'filename'.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "filesystem_path_sanitized",
+            "description": "The 'filename' must be validated/sanitized such that it cannot escape allowed directories or target sensitive files.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "virtualDirCallback.open / virtualDirCallback.write / virtualDirCallback.close",
+        "sink_description": "Writes the HTTP entity body into a virtual file via callback hooks, allowing modules to handle uploaded data as if it were a file.",
+        "required_conditions": [
+          {
+            "id": "virtual_file_access_authorized",
+            "description": "The virtual directory callbacks must ensure that the current request is authorized to write to the virtual resource identified by 'filename'.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "fwrite(Buf, 1, Data_Buf_Size, Fp);",
+        "sink_description": "Writes the parsed HTTP entity body into the opened file handle, committing received data to persistent storage.",
+        "required_conditions": [
+          {
+            "id": "opened_file_is_safe_target",
+            "description": "The FILE *Fp previously obtained must refer only to a file location that the caller is permitted to modify, with any necessary checks done before writing.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

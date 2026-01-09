@@ -1,0 +1,104 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "ptrace_attach",
+      "output_repos_c/CVE-2022-30594/repo/kernel/ptrace.c",
+      "374-474"
+    ],
+    "function_name": "ptrace_attach",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <asm/syscall.h>\t/* for syscall_get_* */\n#include <linux/minmax.h>\n#include <linux/sched/signal.h>\n#include <linux/compat.h>\n#include <linux/cn_proc.h>\n#include <linux/hw_breakpoint.h>\n#include <linux/regset.h>\n#include <linux/uaccess.h>\n#include <linux/syscalls.h>\n#include <linux/pid_namespace.h>\n#include <linux/audit.h>\n#include <linux/uio.h>\n#include <linux/signal.h>\n#include <linux/security.h>\n#include <linux/ptrace.h>\n#include <linux/pagemap.h>\n#include <linux/highmem.h>\n#include <linux/mm.h>\n#include <linux/errno.h>\n#include <linux/sched/task.h>\n#include <linux/sched/coredump.h>\n#include <linux/sched/mm.h>\n#include <linux/sched.h>\n#include <linux/export.h>\n#include <linux/capability.h>\n\nstatic int ptrace_attach(struct task_struct *task, long request,\n\t\t\t unsigned long addr,\n\t\t\t unsigned long flags)\n{\n\tbool seize = (request == PTRACE_SEIZE);\n\tint retval;\n\n\tretval = -EIO;\n\tif (seize) {\n\t\tif (addr != 0)\n\t\t\tgoto out;\n\t\tif (flags & ~(unsigned long)PTRACE_O_MASK)\n\t\t\tgoto out;\n\t\tflags = PT_PTRACED | PT_SEIZED | (flags << PT_OPT_FLAG_SHIFT);\n\t} else {\n\t\tflags = PT_PTRACED;\n\t}\n\n\taudit_ptrace(task);\n\n\tretval = -EPERM;\n\tif (unlikely(task->flags & PF_KTHREAD))\n\t\tgoto out;\n\tif (same_thread_group(task, current))\n\t\tgoto out;\n\n\t/*\n\t * Protect exec's credential calculations against our interference;\n\t * SUID, SGID and LSM creds get determined differently\n\t * under ptrace.\n\t */\n\tretval = -ERESTARTNOINTR;\n\tif (mutex_lock_interruptible(&task->signal->cred_guard_mutex))\n\t\tgoto out;\n\n\ttask_lock(task);\n\tretval = __ptrace_may_access(task, PTRACE_MODE_ATTACH_REALCREDS);\n\ttask_unlock(task);\n\tif (retval)\n\t\tgoto unlock_creds;\n\n\twrite_lock_irq(&tasklist_lock);\n\tretval = -EPERM;\n\tif (unlikely(task->exit_state))\n\t\tgoto unlock_tasklist;\n\tif (task->ptrace)\n\t\tgoto unlock_tasklist;\n\n\ttask->ptrace = flags;\n\n\tptrace_link(task, current);\n\n\t/* SEIZE doesn't trap tracee on attach */\n\tif (!seize)\n\t\tsend_sig_info(SIGSTOP, SEND_SIG_PRIV, task);\n\n\tspin_lock(&task->sighand->siglock);\n\n\t/*\n\t * If the task is already STOPPED, set JOBCTL_TRAP_STOP and\n\t * TRAPPING, and kick it so that it transits to TRACED.  TRAPPING\n\t * will be cleared if the child completes the transition or any\n\t * event which clears the group stop states happens.  We'll wait\n\t * for the transition to complete before returning from this\n\t * function.\n\t *\n\t * This hides STOPPED -> RUNNING -> TRACED transition from the\n\t * attaching thread but a different thread in the same group can\n\t * still observe the transient RUNNING state.  IOW, if another\n\t * thread's WNOHANG wait(2) on the stopped tracee races against\n\t * ATTACH, the wait(2) may fail due to the transient RUNNING.\n\t *\n\t * The following task_is_stopped() test is safe as both transitions\n\t * in and out of STOPPED are protected by siglock.\n\t */\n\tif (task_is_stopped(task) &&\n\t    task_set_jobctl_pending(task, JOBCTL_TRAP_STOP | JOBCTL_TRAPPING))\n\t\tsignal_wake_up_state(task, __TASK_STOPPED);\n\n\tspin_unlock(&task->sighand->siglock);\n\n\tretval = 0;\nunlock_tasklist:\n\twrite_unlock_irq(&tasklist_lock);\nunlock_creds:\n\tmutex_unlock(&task->signal->cred_guard_mutex);\nout:\n\tif (!retval) {\n\t\t/*\n\t\t * We do not bother to change retval or clear JOBCTL_TRAPPING\n\t\t * if wait_on_bit() was interrupted by SIGKILL. The tracer will\n\t\t * not return to user-mode, it will exit and clear this bit in\n\t\t * __ptrace_unlink() if it wasn't already cleared by the tracee;\n\t\t * and until then nobody can ptrace this task.\n\t\t */\n\t\twait_on_bit(&task->jobctl, JOBCTL_TRAPPING_BIT, TASK_KILLABLE);\n\t\tproc_ptrace_connector(task, PTRACE_ATTACH);\n\t}\n\n\treturn retval;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: mutex_unlock\nstatic __always_inline void __rt_mutex_unlock(struct rt_mutex_base *lock)\n{\n\tif (likely(rt_mutex_cmpxchg_release(lock, current, NULL)))\n\t\treturn;\n\n\trt_mutex_slowunlock(lock);\n}\n\nCallee: write_unlock_irq\nvoid __lockfunc _raw_write_unlock_irq(rwlock_t *lock)\n{\n\t__raw_write_unlock_irq(lock);\n}\n\nCallee: spin_unlock\nstatic inline void __bpf_spin_unlock_irqrestore(struct bpf_spin_lock *lock)\n{\n\tunsigned long flags;\n\n\tflags = __this_cpu_read(irqsave_flags);\n\t__bpf_spin_unlock(lock);\n\tlocal_irq_restore(flags);\n}\n\nCallee: signal_wake_up_state\nvoid signal_wake_up_state(struct task_struct *t, unsigned int state)\n{\n\tset_tsk_thread_flag(t, TIF_SIGPENDING);\n\t/*\n\t * TASK_WAKEKILL also means wake it up in the stopped/traced/killable\n\t * case. We don't check t->state here because there is a race with it\n\t * executing another processor and just now entering stopped state.\n\t * By using wake_up_state, we ensure the process will wake up and\n\t * handle its death signal.\n\t */\n\tif (!wake_up_state(t, state | TASK_INTERRUPTIBLE))\n\t\tkick_process(t);\n}\n\nCallee: task_set_jobctl_pending\nbool task_set_jobctl_pending(struct task_struct *task, unsigned long mask)\n{\n\tBUG_ON(mask & ~(JOBCTL_PENDING_MASK | JOBCTL_STOP_CONSUME |\n\t\t\tJOBCTL_STOP_SIGMASK | JOBCTL_TRAPPING));\n\tBUG_ON((mask & JOBCTL_TRAPPING) && !(mask & JOBCTL_PENDING_MASK));\n\n\tif (unlikely(fatal_signal_pending(task) || (task->flags & PF_EXITING)))\n\t\treturn false;\n\n\tif (mask & JOBCTL_STOP_SIGMASK)\n\t\ttask->jobctl &= ~JOBCTL_STOP_SIGMASK;\n\n\ttask->jobctl |= mask;\n\treturn true;\n}\n\nCallee: spin_lock\nstatic bool reg_may_point_to_spin_lock(const struct bpf_reg_state *reg)\n{\n\treturn reg->type == PTR_TO_MAP_VALUE &&\n\t\tmap_value_has_spin_lock(reg->map_ptr);\n}\n\nCallee: send_sig_info\nint send_sig_info(int sig, struct kernel_siginfo *info, struct task_struct *p)\n{\n\t/*\n\t * Make sure legacy kernel users don't send in bad values\n\t * (normal paths check this in check_kill_permission).\n\t */\n\tif (!valid_signal(sig))\n\t\treturn -EINVAL;\n\n\treturn do_send_sig_info(sig, info, p, PIDTYPE_PID);\n}\n\nCallee: ptrace_link\nstatic void ptrace_link(struct task_struct *child, struct task_struct *new_parent)\n{\n\t__ptrace_link(child, new_parent, current_cred());\n}\n\nCallee: write_lock_irq\nvoid __lockfunc _raw_write_lock_irq(rwlock_t *lock)\n{\n\t__raw_write_lock_irq(lock);\n}\n\nCallee: __ptrace_may_access\nstatic int __ptrace_may_access(struct task_struct *task, unsigned int mode)\n{\n\tconst struct cred *cred = current_cred(), *tcred;\n\tstruct mm_struct *mm;\n\tkuid_t caller_uid;\n\tkgid_t caller_gid;\n\n\tif (!(mode & PTRACE_MODE_FSCREDS) == !(mode & PTRACE_MODE_REALCREDS)) {\n\t\tWARN(1, \"denying ptrace access check without PTRACE_MODE_*CREDS\\n\");\n\t\treturn -EPERM;\n\t}\n\n\t/* May we inspect the given task?\n\t * This check is used both for attaching with ptrace\n\t * and for allowing access to sensitive information in /proc.\n\t *\n\t * ptrace_attach denies several cases that /proc allows\n\t * because setting up the necessary parent/child relationship\n\t * or halting the specified task is impossible.\n\t */\n\n\t/* Don't let security modules deny introspection */\n\tif (same_thread_group(task, current))\n\t\treturn 0;\n\trcu_read_lock();\n\tif (mode & PTRACE_MODE_FSCREDS) {\n\t\tcaller_uid = cred->fsuid;\n\t\tcaller_gid = cred->fsgid;\n\t} else {\n\t\t/*\n\t\t * Using the euid would make more sense here, but something\n\t\t * in userland might rely on the old behavior, and this\n\t\t * shouldn't be a security problem since\n\t\t * PTRACE_MODE_REALCREDS implies that the caller explicitly\n\t\t * used a syscall that requests access to another process\n\t\t * (and not a filesystem syscall to procfs).\n\t\t */\n\t\tcaller_uid = cred->uid;\n\t\tcaller_gid = cred->gid;\n\t}\n\ttcred = __task_cred(task);\n\tif (uid_eq(caller_uid, tcred->euid) &&\n\t    uid_eq(caller_uid, tcred->suid) &&\n\t    uid_eq(caller_uid, tcred->uid)  &&\n\t    gid_eq(caller_gid, tcred->egid) &&\n\t    gid_eq(caller_gid, tcred->sgid) &&\n\t    gid_eq(caller_gid, tcred->gid))\n\t\tgoto ok;\n\tif (ptrace_has_cap(tcred->user_ns, mode))\n\t\tgoto ok;\n\trcu_read_unlock();\n\treturn -EPERM;\nok:\n\trcu_read_unlock();\n\t/*\n\t * If a task drops privileges and becomes nondumpable (through a syscall\n\t * like setresuid()) while we are trying to access it, we must ensure\n\t * that the dumpability is read after the credentials; otherwise,\n\t * we may be able to attach to a task that we shouldn't be able to\n\t * attach to (as if the task had dropped privileges without becoming\n\t * nondumpable).\n\t * Pairs with a write barrier in commit_creds().\n\t */\n\tsmp_rmb();\n\tmm = task->mm;\n\tif (mm &&\n\t    ((get_dumpable(mm) != SUID_DUMP_USER) &&\n\t     !ptrace_has_cap(mm->user_ns, mode)))\n\t    return -EPERM;\n\n\treturn security_ptrace_access_check(task, mode);\n}\n\nCallee: mutex_lock_interruptible\nint __sched mutex_lock_interruptible(struct mutex *lock)\n{\n\treturn __mutex_lock_common(lock, TASK_INTERRUPTIBLE, 0, NULL, _RET_IP_);\n}\n\nCallee: audit_ptrace\nvoid __audit_ptrace(struct task_struct *t)\n{\n\tstruct audit_context *context = audit_context();\n\n\tcontext->target_pid = task_tgid_nr(t);\n\tcontext->target_auid = audit_get_loginuid(t);\n\tcontext->target_uid = task_uid(t);\n\tcontext->target_sessionid = audit_get_sessionid(t);\n\tsecurity_task_getsecid_obj(t, &context->target_sid);\n\tmemcpy(context->target_comm, t->comm, TASK_COMM_LEN);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "task->ptrace = flags;",
+        "sink_description": "Establishes a ptrace tracing relationship, enabling the current task to control and inspect the target task.",
+        "required_conditions": [
+          {
+            "id": "no_kernel_thread",
+            "description": "The target task must not be a kernel thread (PF_KTHREAD must be clear).",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (unlikely(task->flags & PF_KTHREAD)) goto out;` before assigning `task->ptrace`."
+          },
+          {
+            "id": "not_same_thread_group",
+            "description": "The tracer must not be in the same thread group as the target task.",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (same_thread_group(task, current)) goto out;` before performing the attach."
+          },
+          {
+            "id": "ptrace_permission_check",
+            "description": "The current task must have ptrace access permission to the target task according to credential and LSM rules.",
+            "locally_satisfied": true,
+            "justification": "The function calls `__ptrace_may_access(task, PTRACE_MODE_ATTACH_REALCREDS)` and aborts on any nonzero return before setting `task->ptrace`."
+          },
+          {
+            "id": "target_not_exiting_or_exited",
+            "description": "The target task must not have already exited or be in an exit state when establishing ptrace.",
+            "locally_satisfied": true,
+            "justification": "After taking `tasklist_lock`, the function checks `if (unlikely(task->exit_state)) goto unlock_tasklist;` before modifying `task->ptrace`."
+          },
+          {
+            "id": "no_existing_tracer",
+            "description": "The target task must not already be traced by another tracer.",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (task->ptrace) goto unlock_tasklist;` before setting `task->ptrace = flags;`."
+          },
+          {
+            "id": "valid_seize_flags",
+            "description": "For PTRACE_SEIZE, the attach flags must be zero or a subset of PTRACE_O_MASK, and the addr argument must be zero.",
+            "locally_satisfied": true,
+            "justification": "On `seize`, the function enforces `if (addr != 0) goto out;` and `if (flags & ~PTRACE_O_MASK) goto out;` before computing and assigning `flags` to `task->ptrace`."
+          }
+        ]
+      },
+      {
+        "sink_id": "ptrace_link(task, current);",
+        "sink_description": "Links the target task into the tracer’s ptrace hierarchy, establishing the tracer/tracee parent-child relationship.",
+        "required_conditions": [
+          {
+            "id": "ptrace_permission_check",
+            "description": "The tracer must be authorized to establish a ptrace relationship with the target task.",
+            "locally_satisfied": true,
+            "justification": "`ptrace_link` is called only after `__ptrace_may_access` has succeeded and `task->ptrace` has been set under `tasklist_lock` with prior checks for kernel threads, same-thread-group, exit_state, and existing ptrace."
+          }
+        ]
+      },
+      {
+        "sink_id": "send_sig_info(SIGSTOP, SEND_SIG_PRIV, task);",
+        "sink_description": "Sends a privileged SIGSTOP to the target task to stop it under ptrace control.",
+        "required_conditions": [
+          {
+            "id": "ptrace_attach_in_progress",
+            "description": "A valid ptrace attach must be in progress and the caller must be authorized to stop the target task.",
+            "locally_satisfied": true,
+            "justification": "`send_sig_info(SIGSTOP, SEND_SIG_PRIV, task);` is invoked only after `task->ptrace` is set, `ptrace_link` is called, and `__ptrace_may_access` plus other eligibility checks have passed; it is additionally skipped for PTRACE_SEIZE, which has different semantics."
+          }
+        ]
+      },
+      {
+        "sink_id": "wait_on_bit(&task->jobctl, JOBCTL_TRAPPING_BIT, TASK_KILLABLE);",
+        "sink_description": "Waits for the tracee’s job control trapping state transition to complete as part of establishing ptrace control.",
+        "required_conditions": [
+          {
+            "id": "attach_successful",
+            "description": "The wait must only be performed when a ptrace attach has been successfully established.",
+            "locally_satisfied": true,
+            "justification": "The `wait_on_bit` is in the `out:` epilogue and executed only when `retval` is zero, i.e., after all attach checks and state changes have completed without error."
+          }
+        ]
+      },
+      {
+        "sink_id": "proc_ptrace_connector(task, PTRACE_ATTACH);",
+        "sink_description": "Notifies proc connector listeners that a ptrace attach operation has occurred, exposing ptrace-related state to external observers.",
+        "required_conditions": [
+          {
+            "id": "attach_successful",
+            "description": "Notifications about a ptrace attach must only be sent if an attach has actually succeeded and is in effect.",
+            "locally_satisfied": true,
+            "justification": "`proc_ptrace_connector(task, PTRACE_ATTACH);` is called only in the `out:` block when `retval` is zero, after all permission checks and ptrace state updates have succeeded."
+          }
+        ]
+      }
+    ]
+  }
+]

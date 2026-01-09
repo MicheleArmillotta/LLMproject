@@ -1,0 +1,1282 @@
+-----------------------------CWE 284(CVE 2014 9422)---------------------------------------
+1. INPUT
+
+MAIN
+
+static int
+check_rpcsec_auth(struct svc_req *rqstp)
+{
+    gss_ctx_id_t ctx;
+    krb5_context kctx;
+    OM_uint32 maj_stat, min_stat;
+    gss_name_t name;
+    krb5_principal princ;
+    int ret, success;
+    krb5_data *c1, *c2, *realm;
+    gss_buffer_desc gss_str;
+    kadm5_server_handle_t handle;
+
+    success = 0;
+    handle = (kadm5_server_handle_t)global_server_handle;
+
+    if (rqstp->rq_cred.oa_flavor != RPCSEC_GSS)
+        return 0;
+
+    ctx = rqstp->rq_svccred;
+
+    maj_stat = gss_inquire_context(
+        &min_stat,
+        ctx,
+        NULL,
+        &name,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL
+    );
+
+    if (maj_stat != GSS_S_COMPLETE) {
+        krb5_klog_syslog(
+            LOG_ERR,
+            "check_rpcsec_auth: failed inquire_context, stat=%u",
+            maj_stat
+        );
+        log_badauth(
+            maj_stat,
+            min_stat,
+            &rqstp->rq_xprt->xp_raddr,
+            NULL
+        );
+        goto fail_name;
+    }
+
+    kctx = handle->context;
+    ret = gss_to_krb5_name(rqstp, kctx, name, &princ, &gss_str);
+    if (ret == 0)
+        goto fail_name;
+
+    /*
+     * Since we accept with GSS_C_NO_NAME, the client can authenticate
+     * against the entire kdb.  Therefore, ensure that the service
+     * name is something reasonable.
+     */
+    if (krb5_princ_size(kctx, princ) != 2)
+        goto fail_princ;
+
+    c1 = krb5_princ_component(kctx, princ, 0);
+    c2 = krb5_princ_component(kctx, princ, 1);
+    realm = krb5_princ_realm(kctx, princ);
+
+    if (strncmp(handle->params.realm, realm->data, realm->length) == 0 &&
+        strncmp("kadmin", c1->data, c1->length) == 0)
+    {
+        if (strncmp("history", c2->data, c2->length) == 0)
+            goto fail_princ;
+        else
+            success = 1;
+    }
+
+fail_princ:
+    if (!success) {
+        krb5_klog_syslog(
+            LOG_ERR,
+            "bad service principal %.*s",
+            gss_str.length,
+            gss_str.value
+        );
+    }
+
+    gss_release_buffer(&min_stat, &gss_str);
+    krb5_free_principal(kctx, princ);
+
+fail_name:
+    gss_release_name(&min_stat, &name);
+    return success;
+}
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Calle name:gss_to_krb5_name
+static int
+gss_to_krb5_name(struct svc_req *rqstp,
+                 krb5_context ctx,
+                 gss_name_t gss_name,
+                 krb5_principal *princ,
+                 gss_buffer_t gss_str)
+{
+    OM_uint32 status, minor_stat;
+    gss_OID gss_type;
+    char *str;
+    int success;
+
+    status = gss_display_name(&minor_stat, gss_name, gss_str, &gss_type);
+    if ((status != GSS_S_COMPLETE) || (gss_type != gss_nt_krb5_name)) {
+        krb5_klog_syslog(
+            LOG_ERR,
+            "gss_to_krb5_name: failed display_name status %d",
+            status
+        );
+        log_badauth(
+            status,
+            minor_stat,
+            &rqstp->rq_xprt->xp_raddr,
+            NULL
+        );
+        return 0;
+    }
+
+    str = malloc(gss_str->length + 1);
+    if (str == NULL)
+        return 0;
+
+    *str = '\0';
+    strncat(str, gss_str->value, gss_str->length);
+
+    success = (krb5_parse_name(ctx, str, princ) == 0);
+
+    free(str);
+    return success;
+}
+
+
+Callee name:log_badauth_display_status_1
+void log_badauth_display_status_1(char *m,
+                                 OM_uint32 code,
+                                 int type,
+                                 int rec)
+{
+    OM_uint32 gssstat, minor_stat;
+    gss_buffer_desc msg;
+    OM_uint32 msg_ctx;
+
+    msg_ctx = 0;
+
+    while (1) {
+        gssstat = gss_display_status(
+            &minor_stat,
+            code,
+            type,
+            GSS_C_NULL_OID,
+            &msg_ctx,
+            &msg
+        );
+
+        if (gssstat != GSS_S_COMPLETE) {
+            if (!rec) {
+                log_badauth_display_status_1(
+                    m,
+                    gssstat,
+                    GSS_C_GSS_CODE,
+                    1
+                );
+                log_badauth_display_status_1(
+                    m,
+                    minor_stat,
+                    GSS_C_MECH_CODE,
+                    1
+                );
+            } else {
+                krb5_klog_syslog(
+                    LOG_ERR,
+                    "GSS-API authentication error %s: recursive failure!",
+                    msg
+                );
+            }
+            return;
+        }
+
+        krb5_klog_syslog(
+            LOG_NOTICE,
+            "%s %s",
+            m,
+            (char *)msg.value
+        );
+
+        (void)gss_release_buffer(&minor_stat, &msg);
+
+        if (!msg_ctx)
+            break;
+    }
+}
+
+
+2. REASONING
+
+Identify semantic sink in the function:
+
+The function’s semantic purpose is “authorize or deny” a request based on the authenticated GSS/Kerberos identity.
+The single output that drives that decision is:
+success = 1 (grant) vs default success = 0 (deny), finalized at return success;.
+Therefore the semantic sink is: the assignment(s) that lead to success = 1 and the final return success.
+Concretely, the sink condition is the if (...) { ... success = 1; } block.
+
+Infer conditions that must hold (intended policy encoded by the code)
+
+Work backward from the only path that sets success = 1:
+success = 1 occurs only if all the guards on that path are satisfied. Reading those guards as policy, the intended conditions are:
+C1: Request uses RPCSEC_GSS.
+C2: GSS context can be queried and yields a client name (gss_inquire_context succeeds).
+C3: The GSS name is a Kerberos principal and can be parsed (gss_to_krb5_name succeeds).
+C4: The principal has exactly 2 components.
+C5: Realm matches the configured realm.
+C6: First component equals "kadmin" (service restriction).
+C7: Second component is not "history" (exclude one instance).
+The access-control relevant ones are C5–C7; C6 is the key “who is allowed” restriction.
+
+Validate conditions locally (check the actual predicate matches the inferred condition):
+
+For each inferred condition, compare:
+Intended meaning (semantic condition) vs Actual implementation (concrete predicate)
+For C6, intended meaning is:
+“the first principal component is exactly the string kadmin”.
+The implementation used is:
+strncmp("kadmin", c1->data, c1->length) == 0
+Validation reasoning steps:
+
+Identify what controls the comparison length.
+strncmp(a, b, n) compares at most n bytes.
+Here, n = c1->length.
+c1->length is attacker-controlled via the authenticated principal string (after parsing).
+Check if the predicate enforces equality or only a prefix relation.
+If n is the attacker’s length, then the check becomes:
+“the first c1->length bytes of "kadmin" equal c1->data”.
+That is a prefix-of-literal check, not equality.
+Construct the minimal counterexample that satisfies the predicate but violates the intended condition.
+Choose c1->data = "ka", c1->length = 2.
+Then the predicate becomes strncmp("kadmin", "ka", 2) == 0 → true.
+But "ka" is not equal to "kadmin".
+Therefore the code allows principals whose first component is any prefix of "kadmin".
+Confirm this counterexample reaches the semantic sink.
+The rest of the guards on the success=1 path do not prevent c1="ka":
+principal size 2 can still hold (e.g., "ka/anything@REALM"),
+realm check (separately) can pass,
+"history" exclusion applies to c2, not c1.
+So the counterexample can propagate to success = 1 → authorization granted.
+Conclude the mismatch.
+Intended condition C6 (“exact match to kadmin”) is not locally validated.
+Actual validated condition is weaker: “c1 is a prefix of kadmin”.
+
+This is an access-control bug.
+
+3. OUTPUT 
+
+{
+  "sinks": [
+    {
+      "sink_id": "return success;",
+      "sink_description": "Authorization decision that grants or denies access to the RPC request based on the authenticated Kerberos service principal.",
+      "required_conditions": [
+        {
+          "id": "rpcsec_gss_required",
+          "description": "The RPC request must use the RPCSEC_GSS authentication mechanism.",
+          "locally_satisfied": true,
+          "justification": "The function explicitly checks rqstp->rq_cred.oa_flavor and immediately returns 0 if it is not RPCSEC_GSS."
+        },
+        {
+          "id": "gss_context_valid",
+          "description": "The GSS security context must be valid and successfully yield a client name.",
+          "locally_satisfied": true,
+          "justification": "gss_inquire_context is invoked and any non-GSS_S_COMPLETE result leads to logging and early exit."
+        },
+        {
+          "id": "krb5_principal_parsed",
+          "description": "The GSS name must correspond to a Kerberos principal and be successfully parsed.",
+          "locally_satisfied": true,
+          "justification": "gss_to_krb5_name enforces gss_nt_krb5_name and successful krb5_parse_name; failures cause denial."
+        },
+        {
+          "id": "principal_has_two_components",
+          "description": "The Kerberos principal must consist of exactly two components.",
+          "locally_satisfied": true,
+          "justification": "The function checks krb5_princ_size(kctx, princ) != 2 and rejects the request if the condition is not met."
+        },
+        {
+          "id": "service_component_is_kadmin",
+          "description": "The first Kerberos principal component must be exactly equal to the service name 'kadmin'.",
+          "locally_satisfied": false
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+
+
+
+
+---------------------------------------CWE 284/862 (CVE 2017 17807)----------------------------
+
+1. INPUT
+
+MAIN
+
+static void construct_get_dest_keyring(struct key **_dest_keyring)
+{
+    struct request_key_auth *rka;
+    const struct cred *cred = current_cred();
+    struct key *dest_keyring = *_dest_keyring, *authkey;
+
+    kenter("%p", dest_keyring);
+
+    /* find the appropriate keyring */
+    if (dest_keyring) {
+        /* the caller supplied one */
+        key_get(dest_keyring);
+    } else {
+        /*
+         * use a default keyring; falling through the cases until we
+         * find one that we actually have
+         */
+        switch (cred->jit_keyring) {
+        case KEY_REQKEY_DEFL_DEFAULT:
+        case KEY_REQKEY_DEFL_REQUESTOR_KEYRING:
+            if (cred->request_key_auth) {
+                authkey = cred->request_key_auth;
+                down_read(&authkey->sem);
+                rka = authkey->payload.data[0];
+
+                if (!test_bit(KEY_FLAG_REVOKED, &authkey->flags))
+                    dest_keyring =
+                        key_get(rka->dest_keyring);
+
+                up_read(&authkey->sem);
+
+                if (dest_keyring)
+                    break;
+            }
+
+        case KEY_REQKEY_DEFL_THREAD_KEYRING:
+            dest_keyring = key_get(cred->thread_keyring);
+            if (dest_keyring)
+                break;
+
+        case KEY_REQKEY_DEFL_PROCESS_KEYRING:
+            dest_keyring = key_get(cred->process_keyring);
+            if (dest_keyring)
+                break;
+
+        case KEY_REQKEY_DEFL_SESSION_KEYRING:
+            rcu_read_lock();
+            dest_keyring = key_get(
+                rcu_dereference(cred->session_keyring)
+            );
+            rcu_read_unlock();
+
+            if (dest_keyring)
+                break;
+
+        case KEY_REQKEY_DEFL_USER_SESSION_KEYRING:
+            dest_keyring =
+                key_get(cred->user->session_keyring);
+            break;
+
+        case KEY_REQKEY_DEFL_USER_KEYRING:
+            dest_keyring = key_get(cred->user->uid_keyring);
+            break;
+
+        case KEY_REQKEY_DEFL_GROUP_KEYRING:
+        default:
+            BUG();
+        }
+    }
+
+    *_dest_keyring = dest_keyring;
+    kleave(" [dk %d]", key_serial(dest_keyring));
+    return;
+}
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Callee name:key_get_instantiation_authkey
+struct key *key_get_instantiation_authkey(key_serial_t target_id)
+{
+    char description[16];
+    struct keyring_search_context ctx = {
+        .index_key.type           = &key_type_request_key_auth,
+        .index_key.description    = description,
+        .cred                     = current_cred(),
+        .match_data.cmp           = key_default_cmp,
+        .match_data.raw_data      = description,
+        .match_data.lookup_type   = KEYRING_SEARCH_LOOKUP_DIRECT,
+        .flags                    = KEYRING_SEARCH_DO_STATE_CHECK,
+    };
+    struct key *authkey;
+    key_ref_t authkey_ref;
+
+    sprintf(description, "%x", target_id);
+
+    authkey_ref = search_process_keyrings(&ctx);
+
+    if (IS_ERR(authkey_ref)) {
+        authkey = ERR_CAST(authkey_ref);
+        if (authkey == ERR_PTR(-EAGAIN))
+            authkey = ERR_PTR(-ENOKEY);
+        goto error;
+    }
+
+    authkey = key_ref_to_ptr(authkey_ref);
+
+    if (test_bit(KEY_FLAG_REVOKED, &authkey->flags)) {
+        key_put(authkey);
+        authkey = ERR_PTR(-EKEYREVOKED);
+    }
+
+error:
+    return authkey;
+}
+
+
+2. REASONING
+
+Identify semantic sink in the function:
+Reasoning pattern used
+Look for the statement(s) where the function commits to a security-relevant decision that will be used later as an authority boundary.
+In access-control bugs, the sink is usually:
+selecting a “target object” (resource/container/context), or
+selecting “who” / “where” an action will happen under.
+Applied to this code
+The function’s purpose is: choose a destination keyring.
+The committed decision is:
+
+*_dest_keyring = dest_keyring;
+
+This is a semantic sink because the chosen keyring determines the access scope of the key that will be instantiated (who can later read/modify it). If the wrong keyring is selected, access control is effectively bypassed downstream even if downstream code is correct.
+Secondary “sub-sinks” are each key_get(...) that selects a candidate destination keyring, because these are the decision points feeding the final sink.
+
+Infer conditions that must hold:
+Reasoning pattern used
+Once the semantic sink is found, derive what must be true for the sink to be safe.
+For CWE-284, the generic template is:
+If a function selects a target object that carries security policy, then it must ensure the current principal is authorized to use that target object for the intended operation.
+So I ask:
+What is the principal? → current_cred() (stored in cred)
+What is the target object? → dest_keyring
+What is the operation? → “instantiate/store a key into this keyring” (write/insert capability)
+What are the sources of the target object? → caller-supplied, request_key_auth-derived, thread/process/session/user keyrings.
+Applied to this code → conditions
+
+C1 (auth-derived keyring must be authorized)
+
+If dest_keyring comes from cred->request_key_auth:
+rka = authkey->payload.data[0];
+dest_keyring = key_get(rka->dest_keyring);
+
+Then it must hold that:
+the auth object is valid for this caller/context, and
+rka->dest_keyring is a keyring the current cred is allowed to use as destination for instantiation.
+This is the “no confused-authority via delegated auth object” condition.
+
+C2 (fallback keyrings must be writable for current cred)
+
+If dest_keyring comes from:
+cred->thread_keyring
+cred->process_keyring
+cred->session_keyring
+cred->user->session_keyring
+cred->user->uid_keyring
+then it must hold that the current cred has the right permission (write/instantiate) on that keyring. Otherwise the function is selecting a destination container without proving the principal may use it.
+These are the direct “authorization on selected target” conditions.
+
+Validate conditions locally:
+
+Reasoning pattern used
+For each inferred condition, check whether the function:
+performs an explicit authorization check (ACL/capability/ownership/permission test), or
+calls another function that enforces it, or
+has a structural guarantee that makes it unnecessary (e.g., keyrings are always private to cred and cannot be influenced).
+If none are present, then the condition is not locally validated → vulnerability candidate.
+Applied to this code
+Check for local validation of C1
+Inside the authkey path the code does:
+lock: down_read(&authkey->sem)
+revocation check: !test_bit(KEY_FLAG_REVOKED, &authkey->flags)
+reads rka->dest_keyring
+returns it via key_get(...)
+What is missing locally:
+No check that the authkey is bound to current requestor in a way that prevents misuse.
+No check that rka->dest_keyring is authorized for the operation under current_cred().
+The presence of locking/revocation checks shows the author cared about lifetime/state, not authorization. That mismatch is a strong semantic signal.
+So: C1 is not validated locally.
+Check for local validation of C2
+In every fallback case, the only operation is:
+dest_keyring = key_get(...);
+key_get() is a refcount increment; it is not a permission check.
+What is missing locally:
+No key_permission(...), no “may_write/may_link” check, no ownership check, no LSM hook invocation (in this snippet), no capability check.
+No sanitization of dest_keyring coming from caller either.
+So: C2 is not validated locally.
+
+3. OUTPUT
+
+{
+  "sinks": [
+    {
+      "sink_id": "*_dest_keyring = dest_keyring",
+      "sink_description": "Selects and commits the destination keyring into which a key will be instantiated, thereby determining the authorization scope and access control domain of the resulting key.",
+      "required_conditions": [
+        {
+          "id": "authkey_dest_keyring_authorized",
+          "description": "If the destination keyring is derived from request_key_auth (rka->dest_keyring), it must be authorized for use by the current credentials and be correctly bound to the current request context.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "fallback_keyring_write_permission",
+          "description": "If the destination keyring is selected from thread, process, session, or user keyrings, the current credentials must have write or instantiate permission on that keyring.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "authkey_integrity_and_freshness",
+          "description": "The request_key_auth object used to derive the destination keyring must be valid, not revoked, and protected against concurrent modification while being accessed.",
+          "locally_satisfied": true,
+          "justification": "The code acquires authkey->sem and checks KEY_FLAG_REVOKED before accessing rka->dest_keyring, ensuring basic integrity and lifetime safety."
+        }
+      ]
+    }
+  ]
+}
+
+
+
+-----------------------------------------CWE 862 (CVE 2017-5985)---------------------------------------
+
+1. INPUT
+
+MAIN
+
+static int rename_in_ns(int pid, char *oldname, char **newnamep)
+{
+    int fd = -1, ofd = -1, ret, ifindex = -1;
+    bool grab_newname = false;
+
+    ofd = lxc_preserve_ns(getpid(), "net");
+    if (ofd < 0) {
+        fprintf(stderr,
+                "Failed opening network namespace path for '%d'.",
+                getpid());
+        return -1;
+    }
+
+    fd = lxc_preserve_ns(pid, "net");
+    if (fd < 0) {
+        fprintf(stderr,
+                "Failed opening network namespace path for '%d'.",
+                pid);
+        return -1;
+    }
+
+    if (setns(fd, 0) < 0) {
+        fprintf(stderr, "setns to container network namespace\n");
+        goto out_err;
+    }
+
+    close(fd);
+    fd = -1;
+
+    if (!*newnamep) {
+        grab_newname = true;
+        *newnamep = VETH_DEF_NAME;
+
+        if (!(ifindex = if_nametoindex(oldname))) {
+            fprintf(stderr, "failed to get netdev index\n");
+            goto out_err;
+        }
+    }
+
+    ret = lxc_netdev_rename_by_name(oldname, *newnamep);
+    if (ret < 0) {
+        fprintf(stderr,
+                "Error %d renaming netdev %s to %s in container\n",
+                ret, oldname, *newnamep);
+        goto out_err;
+    }
+
+    if (grab_newname) {
+        char ifname[IFNAMSIZ], *namep = ifname;
+
+        if (!if_indextoname(ifindex, namep)) {
+            fprintf(stderr, "Failed to get new netdev name\n");
+            goto out_err;
+        }
+
+        *newnamep = strdup(namep);
+        if (!*newnamep)
+            goto out_err;
+    }
+
+    if (setns(ofd, 0) < 0) {
+        fprintf(stderr, "Error returning to original netns\n");
+        close(ofd);
+        return -1;
+    }
+
+    close(ofd);
+    return 0;
+
+out_err:
+    if (ofd >= 0)
+        close(ofd);
+
+    if (setns(ofd, 0) < 0)
+        fprintf(stderr,
+                "Error returning to original network namespace\n");
+
+    if (fd >= 0)
+        close(fd);
+
+    return -1;
+}
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Callee name:lxc_abstract_unix_close
+int lxc_abstract_unix_close(int fd)
+{
+    struct sockaddr_un addr;
+    socklen_t addrlen = sizeof(addr);
+
+    if (!getsockname(fd, (struct sockaddr *)&addr, &addrlen) &&
+        addr.sun_path[0])
+        unlink(addr.sun_path);
+
+    close(fd);
+    return 0;
+}
+
+Callee name:setns
+static inline int setns(int fd, int nstype)
+{
+#ifdef __NR_setns
+    return syscall(__NR_setns, fd, nstype);
+#elif defined(__NR_set_ns)
+    return syscall(__NR_set_ns, fd, nstype);
+#else
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+Callee name:lxc_netdev_rename_by_name
+int lxc_netdev_rename_by_name(const char *oldname, const char *newname)
+{
+    int len, index;
+
+    len = strlen(oldname);
+    if (len == 1 || len >= IFNAMSIZ)
+        return -EINVAL;
+
+    index = if_nametoindex(oldname);
+    if (!index)
+        return -EINVAL;
+
+    return lxc_netdev_rename_by_index(index, newname);
+}
+
+Callee name:lxc_preserve_ns
+int lxc_preserve_ns(const int pid, const char *ns)
+{
+    int ret;
+
+    /* 5 /proc + 21 /int_as_str + 3 /ns + 20 /NS_NAME + 1 \0 */
+#define __NS_PATH_LEN 50
+    char path[__NS_PATH_LEN];
+
+    /*
+     * This way we can use this function to also check whether namespaces
+     * are supported by the kernel by passing in the NULL or the empty
+     * string.
+     */
+    ret = snprintf(
+        path,
+        __NS_PATH_LEN,
+        "/proc/%d/ns%s%s",
+        pid,
+        !ns || strcmp(ns, "") == 0 ? "" : "/",
+        !ns || strcmp(ns, "") == 0 ? "" : ns
+    );
+
+    if (ret < 0 || (size_t)ret >= __NS_PATH_LEN)
+        return -1;
+
+    return open(path, O_RDONLY | O_CLOEXEC);
+}
+
+
+2. REASONING
+
+Identify semantic sink in the function:
+
+Goal at this step: find the operation(s) that exercise authority or cross a security boundary, i.e., the parts where access control must be correct or harm occurs.
+In rename_in_ns, two actions meet that definition:
+
+setns(fd, 0)
+
+Semantically: “enter the network namespace of pid”.
+This is a security boundary switch (changes which resources the thread can act on).
+
+lxc_netdev_rename_by_name(oldname, *newnamep)
+
+Semantically: “mutate network configuration inside the (now-current) namespace”.
+This is a privileged side-effect that can impact policy, isolation, and subsequent access decisions.
+The key semantic observation: the code explicitly changes context (namespace) and then performs a privileged mutation in that context. That pairing is a classic access-control hotspot.
+
+Infer conditions that must hold:
+
+Goal at this step: for each sink, derive the necessary security predicates that must be true for the sink to be safe. This is not “does the kernel allow it”, but “is it authorized/intended in the application’s policy”.
+Conditions for setns(fd, 0) (sink #1)
+A1 — Target binding / authorization:
+The pid whose namespace is entered must be the intended, authorized target (e.g., “the container this request is allowed to operate on”), not an arbitrary process ID.
+Why this is required: setns grants the caller the ability to operate on resources “as if inside that namespace”. If pid is attacker-chosen, the caller becomes a deputy that can cross into any reachable namespace.
+A2 — Caller privilege must be appropriate for this request:
+The caller must be authorized (by the application policy) to perform namespace transitions and network-admin operations. In other words: this function must not be reachable from untrusted inputs without a privilege gate.
+Why this is required: in many systems, the privileged daemon has the capabilities; if it performs setns on behalf of an unprivileged request, that is a confused-deputy access-control failure unless the daemon enforces policy.
+
+Validate conditions locally:
+
+Goal at this step: check whether the code explicitly enforces the inferred predicates, using only local evidence (the function + provided callees). If not enforced, treat as missing/implicit condition → potential CWE-284.
+Local validation for A1 (target binding / authorization)
+What the code does:
+Accepts pid as a parameter.
+
+Builds /proc/<pid>/ns/net path and opens it (lxc_preserve_ns(pid,"net")).
+
+Calls setns(fd, 0).
+
+What the code does NOT do (locally):
+No check that pid corresponds to a container that the caller is allowed to manage.
+No check that pid matches an expected container init PID / stored identity.
+No check that the namespace handle belongs to the intended tenant/domain.
+No check that pid comes from a trusted source.
+
+Conclusion: A1 is not validated. The operation’s authority is keyed directly off an unbound identifier (pid). This is the exact pattern: “security boundary switch based on unverified selector”.
+
+Local validation for A2 (caller privilege / gating)
+What the code does:
+Attempts setns, checks only success/failure.
+Attempts rename, checks only success/failure.
+What the code does NOT do (locally):
+No role/permission check.
+No check of request origin / caller identity / policy decision.
+No explicit requirement that the caller is the container manager with a verified request.
+
+Conclusion: A2 is not validated. The function assumes that whoever calls it is allowed to exercise these capabilities. If reachable from less-trusted paths, the privileged process becomes a deputy.
+
+
+3. OUTPUT
+
+{
+  "sinks": [
+    {
+      "sink_id": "setns(fd, 0)",
+      "sink_description": "Switch the calling thread into another process's network namespace, crossing a security and isolation boundary.",
+      "required_conditions": [
+        {
+          "id": "target_namespace_authorized",
+          "description": "The target pid must correspond to an intended and authorized network namespace (e.g., the correct container).",
+          "locally_satisfied": false
+        },
+        {
+          "id": "caller_authorized_for_setns",
+          "description": "An unprivileged requester must be explicitly authorized to cause a privileged component to enter another process’s network namespace, and the target namespace must be bound to an approved security domain (e.g., the requester’s container).",
+          "locally_satisfied": false
+        },
+        {
+          "id": "namespace_fd_valid",
+          "description": "The file descriptor used for setns must refer to a valid network namespace.",
+          "locally_satisfied": true,
+          "justification": "The return value of lxc_preserve_ns(pid, \"net\") is checked and setns is only attempted if fd >= 0."
+        }
+      ]
+    },
+    {
+      "sink_id": "lxc_netdev_rename_by_name(oldname, *newnamep)",
+      "sink_description": "Rename a network interface inside the current network namespace, mutating privileged network configuration.",
+      "required_conditions": [
+        {
+          "id": "caller_authorized_for_net_admin",
+          "description": "An unprivileged requester must be authorized to invoke privileged network-administration actions in the target network namespace, and that namespace must be the one the requester is permitted to affect.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "interface_identity_valid",
+          "description": "The interface identified by oldname must be the intended target within the namespace.",
+          "locally_satisfied": true,
+          "justification": "lxc_netdev_rename_by_name resolves oldname to an interface index using if_nametoindex before renaming."
+        },
+        {
+          "id": "oldname_valid",
+          "description": "The old interface name must be syntactically valid and within allowed length constraints.",
+          "locally_satisfied": true,
+          "justification": "lxc_netdev_rename_by_name explicitly checks the length of oldname and rejects invalid values."
+        }
+      ]
+    }
+  ]
+}
+
+
+
+---------------------CWE 863 (CVE 2018 18955)-----------------------
+
+1. INPUT
+
+MAIN
+
+static ssize_t map_write(struct file *file,
+                         const char __user *buf,
+                         size_t count,
+                         loff_t *ppos,
+                         int cap_setid,
+                         struct uid_gid_map *map,
+                         struct uid_gid_map *parent_map)
+{
+    struct seq_file *seq = file->private_data;
+    struct user_namespace *ns = seq->private;
+    struct uid_gid_map new_map;
+    unsigned idx;
+    struct uid_gid_extent extent;
+    char *kbuf = NULL, *pos, *next_line;
+    ssize_t ret;
+
+    /* Only allow < page size writes at the beginning of the file */
+    if ((*ppos != 0) || (count >= PAGE_SIZE))
+        return -EINVAL;
+
+    /* Slurp in the user data */
+    kbuf = memdup_user_nul(buf, count);
+    if (IS_ERR(kbuf))
+        return PTR_ERR(kbuf);
+
+    /*
+     * The userns_state_mutex serializes all writes to any given map.
+     *
+     * Any map is only ever written once.
+     *
+     * An id map fits within 1 cache line on most architectures.
+     *
+     * On read nothing needs to be done unless you are on an
+     * architecture with a crazy cache coherency model like alpha.
+     *
+     * There is a one time data dependency between reading the
+     * count of the extents and the values of the extents.  The
+     * desired behavior is to see the values of the extents that
+     * were written before the count of the extents.
+     *
+     * To achieve this smp_wmb() is used on guarantee the write
+     * order and smp_rmb() is guaranteed that we don't have crazy
+     * architectures returning stale data.
+     */
+    mutex_lock(&userns_state_mutex);
+
+    memset(&new_map, 0, sizeof(struct uid_gid_map));
+
+    ret = -EPERM;
+    /* Only allow one successful write to the map */
+    if (map->nr_extents != 0)
+        goto out;
+
+    /*
+     * Adjusting namespace settings requires capabilities on the target.
+     */
+    if (cap_valid(cap_setid) &&
+        !file_ns_capable(file, ns, CAP_SYS_ADMIN))
+        goto out;
+
+    /* Parse the user data */
+    ret = -EINVAL;
+    pos = kbuf;
+
+    for (; pos; pos = next_line) {
+
+        /* Find the end of line and ensure I don't look past it */
+        next_line = strchr(pos, '\n');
+        if (next_line) {
+            *next_line = '\0';
+            next_line++;
+            if (*next_line == '\0')
+                next_line = NULL;
+        }
+
+        pos = skip_spaces(pos);
+        extent.first = simple_strtoul(pos, &pos, 10);
+        if (!isspace(*pos))
+            goto out;
+
+        pos = skip_spaces(pos);
+        extent.lower_first = simple_strtoul(pos, &pos, 10);
+        if (!isspace(*pos))
+            goto out;
+
+        pos = skip_spaces(pos);
+        extent.count = simple_strtoul(pos, &pos, 10);
+        if (*pos && !isspace(*pos))
+            goto out;
+
+        /* Verify there is not trailing junk on the line */
+        pos = skip_spaces(pos);
+
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Callee name:maybe_kfree_parameter
+static void maybe_kfree_parameter(void *param)
+{
+    struct kmalloced_param *p;
+
+    spin_lock(&kmalloced_params_lock);
+    list_for_each_entry(p, &kmalloced_params, list) {
+        if (p->val == param) {
+            list_del(&p->list);
+            kfree(p);
+            break;
+        }
+    }
+    spin_unlock(&kmalloced_params_lock);
+}
+
+Callee name:rt_mutex_unlock
+void __sched rt_mutex_unlock(struct rt_mutex *lock)
+{
+    mutex_release(&lock->dep_map, 1, _RET_IP_);
+    rt_mutex_fastunlock(lock, rt_mutex_slowunlock);
+}
+
+Calle name:memcpy_skip
+static inline unsigned long
+memcpy_skip(void *dst, const void *src, unsigned long n)
+{
+    return 0;
+}
+
+Callee name:map_id_range_down
+static u32 map_id_range_down(struct uid_gid_map *map, u32 id, u32 count)
+{
+    struct uid_gid_extent *extent;
+    unsigned extents = map->nr_extents;
+
+    smp_rmb();
+
+    if (extents <= UID_GID_MAP_MAX_BASE_EXTENTS)
+        extent = map_id_range_down_base(extents, map, id, count);
+    else
+        extent = map_id_range_down_max(extents, map, id, count);
+
+    /* Map the id or note failure */
+    if (extent)
+        id = (id - extent->first) + extent->lower_first;
+    else
+        id = (u32)-1;
+
+    return id;
+}
+
+Callee name:sort_idmaps
+static int sort_idmaps(struct uid_gid_map *map)
+{
+    if (map->nr_extents <= UID_GID_MAP_MAX_BASE_EXTENTS)
+        return 0;
+
+    /* Sort forward array. */
+    sort(map->forward,
+         map->nr_extents,
+         sizeof(struct uid_gid_extent),
+         cmp_extents_forward,
+         NULL);
+
+    /* Only copy the memory from forward we actually need. */
+    map->reverse = kmemdup(
+        map->forward,
+        map->nr_extents * sizeof(struct uid_gid_extent),
+        GFP_KERNEL
+    );
+    if (!map->reverse)
+        return -ENOMEM;
+
+    /* Sort reverse array. */
+    sort(map->reverse,
+         map->nr_extents,
+         sizeof(struct uid_gid_extent),
+         cmp_extents_reverse,
+         NULL);
+
+    return 0;
+}
+
+Callee name:new_idmap_permitted
+static bool new_idmap_permitted(const struct file *file,
+                               struct user_namespace *ns,
+                               int cap_setid,
+                               struct uid_gid_map *new_map)
+{
+    const struct cred *cred = file->f_cred;
+
+    /*
+     * Don't allow mappings that would allow anything that wouldn't
+     * be allowed without the establishment of unprivileged mappings.
+     */
+    if ((new_map->nr_extents == 1) &&
+        (new_map->extent[0].count == 1) &&
+        uid_eq(ns->owner, cred->euid))
+    {
+        u32 id = new_map->extent[0].lower_first;
+
+        if (cap_setid == CAP_SETUID) {
+            kuid_t uid = make_kuid(ns->parent, id);
+            if (uid_eq(uid, cred->euid))
+                return true;
+        } else if (cap_setid == CAP_SETGID) {
+            kgid_t gid = make_kgid(ns->parent, id);
+            if (!(ns->flags & USERNS_SETGROUPS_ALLOWED) &&
+                gid_eq(gid, cred->egid))
+                return true;
+        }
+    }
+
+    /* Allow anyone to set a mapping that doesn't require privilege */
+    if (!cap_valid(cap_setid))
+        return true;
+
+    /*
+     * Allow the specified ids if we have the appropriate capability
+     * (CAP_SETUID or CAP_SETGID) over the parent user namespace.
+     * And the opener of the id file also had the appropriate capability.
+     */
+    if (ns_capable(ns->parent, cap_setid) &&
+        file_ns_capable(file, ns->parent, cap_setid))
+        return true;
+
+    return false;
+}
+
+Callee name:insert_extent
+static int insert_extent(struct uid_gid_map *map, struct uid_gid_extent *extent)
+{
+    struct uid_gid_extent *dest;
+
+    if (map->nr_extents == UID_GID_MAP_MAX_BASE_EXTENTS) {
+        struct uid_gid_extent *forward;
+
+        /* Allocate memory for 340 mappings. */
+        forward = kmalloc_array(
+            UID_GID_MAP_MAX_EXTENTS,
+            sizeof(struct uid_gid_extent),
+            GFP_KERNEL
+        );
+        if (!forward)
+            return -ENOMEM;
+
+        /*
+         * Copy over memory. Only set up memory for the forward pointer.
+         * Defer the memory setup for the reverse pointer.
+         */
+        memcpy(
+            forward,
+            map->extent,
+            map->nr_extents * sizeof(map->extent[0])
+        );
+
+        map->forward = forward;
+        map->reverse = NULL;
+    }
+
+    if (map->nr_extents < UID_GID_MAP_MAX_BASE_EXTENTS)
+        dest = &map->extent[map->nr_extents];
+    else
+        dest = &map->forward[map->nr_extents];
+
+    *dest = *extent;
+    map->nr_extents++;
+
+    return 0;
+}
+
+Callee name:mappings_overlap
+static bool mappings_overlap(struct uid_gid_map *new_map,
+                             struct uid_gid_extent *extent)
+{
+    u32 upper_first, lower_first, upper_last, lower_last;
+    unsigned idx;
+
+    upper_first = extent->first;
+    lower_first = extent->lower_first;
+    upper_last = upper_first + extent->count - 1;
+    lower_last = lower_first + extent->count - 1;
+
+    for (idx = 0; idx < new_map->nr_extents; idx++) {
+        u32 prev_upper_first, prev_lower_first;
+        u32 prev_upper_last, prev_lower_last;
+        struct uid_gid_extent *prev;
+
+        if (new_map->nr_extents <= UID_GID_MAP_MAX_BASE_EXTENTS)
+            prev = &new_map->extent[idx];
+        else
+            prev = &new_map->forward[idx];
+
+        prev_upper_first = prev->first;
+        prev_lower_first = prev->lower_first;
+        prev_upper_last = prev_upper_first + prev->count - 1;
+        prev_lower_last = prev_lower_first + prev->count - 1;
+
+        /* Does the upper range intersect a previous extent? */
+        if ((prev_upper_first <= upper_last) &&
+            (prev_upper_last >= upper_first))
+            return true;
+
+        /* Does the lower range intersect a previous extent? */
+        if ((prev_lower_first <= lower_last) &&
+            (prev_lower_last >= lower_first))
+            return true;
+    }
+
+    return false;
+}
+
+Callee name:proc_skip_spaces
+static size_t proc_skip_spaces(char **buf)
+{
+    size_t ret;
+    char *tmp = skip_spaces(*buf);
+
+    ret = tmp - *buf;
+    *buf = tmp;
+
+    return ret;
+}
+
+Callee name:file_ns_capable
+bool file_ns_capable(const struct file *file,
+                     struct user_namespace *ns,
+                     int cap)
+{
+    if (WARN_ON_ONCE(!cap_valid(cap)))
+        return false;
+
+    if (security_capable(file->f_cred, ns, cap) == 0)
+        return true;
+
+    return false;
+}
+
+Callee name:rt_mutex_lock_interruptible
+int __sched rt_mutex_lock_interruptible(struct rt_mutex *lock)
+{
+    int ret;
+
+    might_sleep();
+
+    mutex_acquire(&lock->dep_map, 0, 0, _RET_IP_);
+    ret = rt_mutex_fastlock(lock,
+                            TASK_INTERRUPTIBLE,
+                            rt_mutex_slowlock);
+    if (ret)
+        mutex_release(&lock->dep_map, 1, _RET_IP_);
+
+    return ret;
+}
+
+2. REASONING
+
+Identify semantic sink in the function:
+Reasoning pattern
+For CWE-284/863-style issues, a “semantic sink” is the point where the code finalizes a security-relevant interpretation of attacker-influenced input, and the rest of the system will trust that interpretation for authorization decisions.
+So I looked for:
+
+- where the function stops “building” a structure and starts treating it as “valid”
+- where representation choices (ordering/canonicalization) become fixed
+- where downstream code will consume the structure assuming invariants
+
+Applied to this code:
+map_write() builds a UID/GID mapping (new_map) that will later drive identity translation and thus authorization outcomes. The key transition from “raw extents” → “trusted structure” is:
+
+ret = sort_idmaps(&new_map);
+if (ret < 0)
+    goto out;
+
+
+Because sort_idmaps():
+changes the effective lookup order by sorting extents
+builds the forward/reverse arrays used later by lookup functions (e.g., map_id_range_down() depends on sorted arrays)
+Therefore, the sink is not “parse succeeded”; it’s “canonical structure constructed and ready to be committed/trusted.”
+
+Infer conditions that must hold:
+Reasoning pattern
+Once the sink is found, infer “must-hold” conditions by asking:
+If downstream enforcement assumes invariants after this sink, what must already be true before the sink for the authorization outcome to be correct?
+For ordering/canonicalization sinks, the generic conditions are:
+Authorization must be decided on the same representation that enforcement will use.
+No meaningful transformation of the security object may occur after authorization is decided.
+The authorization decision must occur only once the object’s full semantics are known.
+Applied to this code (the two critical conditions)
+C1 - Authorization after full semantics are known
+Authorization must be checked only after the map’s semantics are finalized (i.e., after the extents are in the final order used for lookup).
+Reason: ordering affects which extent matches a lookup; until ordering is fixed, the “meaning” of the map is not fixed.
+C2- No semantic mutation after authorization
+After the authorization check, nothing should transform the map in a way that can change lookup outcomes.
+Reason: sorting is not a cosmetic change; it changes resolution behavior (which extent wins for a given ID). That can change the effective privileges granted.
+
+Validate conditions locally
+Reasoning pattern
+To validate locally, I check the relative order of:
+when the code performs (or delegates) authorization checks on new_map
+when it canonicalizes the structure into the form used by enforcement (sort_idmaps())
+If authorization happens on a pre-canonical structure and canonicalization occurs later, that is a semantic TOCTOU:
+Time of check: unordered/insertion-order representation
+Time of use: sorted/canonical representation
+Applied to this code
+Locally, we can see:
+- new_map is incrementally built (extents inserted in parse order)
+- then later sort_idmaps(&new_map) is called to reorder/build arrays used for enforcement
+So the local validation result is:
+- C1 fails if any authorization decision (explicit or delegated) is made before sort_idmaps(), because the checker reasons about a representation whose final lookup semantics are not yet fixed.
+- C2 fails because sorting is a semantic transformation occurring after the earlier checks, meaning the validated object is not the same as the used object.
+This is exactly how the bug is caught: not by spotting a missing permission check, but by spotting a representation mismatch caused by post-check canonicalization.
+
+3. OUTPUT
+
+{
+  "sinks": [
+    {
+      "sink_id": "ret = sort_idmaps(&new_map);",
+      "sink_description": "Canonicalizes the UID/GID mapping by sorting extents and constructing forward/reverse arrays that will later be trusted by identity-translation and access-control logic.",
+      "required_conditions": [
+        {
+          "id": "single_write_only",
+          "description": "The UID/GID map must only be written once to prevent redefinition or escalation after initial setup.",
+          "locally_satisfied": true,
+          "justification": "The function checks map->nr_extents != 0 and aborts, enforcing a single successful write."
+        },
+        {
+          "id": "authorization_after_full_semantics_known",
+          "description": "Authorization decisions must be performed only after the full semantic meaning of the map (including ordering and dominance of extents) is finalized.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "no_semantic_mutation_post_authorization",
+          "description": "No semantic transformation that can affect lookup or privilege resolution may occur after authorization has been decided.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "lookup_authorization_representation_consistency",
+          "description": "The representation of the UID/GID map used during authorization must be identical to the representation used later during ID lookup and enforcement.",
+          "locally_satisfied": false
+        },
+        {
+          "id": "structural_integrity_before_sort",
+          "description": "The UID/GID map must be structurally well-formed (no overlaps, valid ranges) before canonicalization.",
+          "locally_satisfied": true,
+          "justification": "The function enforces non-overlapping extents and valid ranges during parsing and insertion before calling sort_idmaps()."
+        }
+      ]
+    }
+  ]
+}
+
+
+

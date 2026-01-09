@@ -1,0 +1,116 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "ShouldBlockAdOnTaskRunner",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-21323/snippet_1/code_before.cc",
+      "57-91"
+    ],
+    "function_name": "ShouldBlockAdOnTaskRunner",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"url/url_canon.h\"\n#include \"ui/base/resource/resource_bundle.h\"\n#include \"services/network/network_context.h\"\n#include \"mojo/public/cpp/bindings/remote.h\"\n#include \"extensions/common/url_pattern.h\"\n#include \"content/public/browser/web_contents.h\"\n#include \"content/public/browser/storage_partition.h\"\n#include \"content/public/browser/render_frame_host.h\"\n#include \"content/public/browser/browser_thread.h\"\n#include \"content/public/browser/browser_context.h\"\n#include \"brave/grit/brave_generated_resources.h\"\n#include \"brave/components/brave_shields/common/brave_shield_constants.h\"\n#include \"brave/components/brave_shields/browser/brave_shields_web_contents_observer.h\"\n#include \"brave/components/brave_shields/browser/brave_shields_util.h\"\n#include \"brave/components/brave_shields/browser/ad_block_service.h\"\n#include \"brave/common/network_constants.h\"\n#include \"brave/browser/net/url_context.h\"\n#include \"brave/browser/brave_browser_process_impl.h\"\n#include \"base/strings/string_util.h\"\n#include \"base/base64url.h\"\n#include <vector>\n#include <utility>\n#include <string>\n#include <memory>\n#include \"brave/browser/net/brave_ad_block_tp_network_delegate_helper.h\"\n\nvoid ShouldBlockAdOnTaskRunner(std::shared_ptr<BraveRequestInfo> ctx,\n                               base::Optional<std::string> canonical_name) {\n  bool did_match_rule = false;\n  bool did_match_exception = false;\n  bool did_match_important = false;\n  if (!ctx->initiator_url.is_valid()) {\n    return;\n  }\n  std::string source_host = ctx->initiator_url.host();\n\n  g_brave_browser_process->ad_block_service()->ShouldStartRequest(\n      ctx->request_url, ctx->resource_type, source_host, &did_match_rule,\n      &did_match_exception, &did_match_important, &ctx->mock_data_url);\n  if (did_match_important) {\n    ctx->blocked_by = kAdBlocked;\n    return;\n  }\n\n  if (canonical_name.has_value() &&\n      ctx->request_url.host() != *canonical_name && *canonical_name != \"\") {\n    GURL::Replacements replacements = GURL::Replacements();\n    replacements.SetHost(\n        canonical_name->c_str(),\n        url::Component(0, static_cast<int>(canonical_name->length())));\n    const GURL canonical_url = ctx->request_url.ReplaceComponents(replacements);\n\n    g_brave_browser_process->ad_block_service()->ShouldStartRequest(\n        ctx->request_url, ctx->resource_type, source_host, &did_match_rule,\n        &did_match_exception, &did_match_important, &ctx->mock_data_url);\n  }\n\n  if (did_match_important || (did_match_rule && !did_match_exception)) {\n    ctx->blocked_by = kAdBlocked;\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": [
+      {
+        "sink_id": "g_brave_browser_process->ad_block_service()->ShouldStartRequest(...)",
+        "sink_description": "Queries the ad_block_service to decide whether the current network request should be allowed, and may populate ctx->mock_data_url based on matching rules.",
+        "required_conditions": [
+          {
+            "id": "initiator_url_valid",
+            "description": "The request must have a valid initiator_url before consulting ad_block_service, to avoid exposing or misattributing filtering decisions for requests without a legitimate source.",
+            "locally_satisfied": true,
+            "justification": "The function immediately returns if ctx->initiator_url.is_valid() is false, so no calls to ShouldStartRequest occur without a valid initiator."
+          },
+          {
+            "id": "service_return_handling",
+            "description": "Results from ShouldStartRequest (rule/exception/important flags and mock_data_url) must only be used to make filtering decisions and not exposed directly to external, untrusted parties.",
+            "locally_satisfied": false,
+            "justification": ""
+          }
+        ]
+      },
+      {
+        "sink_id": "ctx->blocked_by = kAdBlocked",
+        "sink_description": "Marks the request context as blocked by ad blocking, which will affect subsequent handling and may be observable by higher layers or external code.",
+        "required_conditions": [
+          {
+            "id": "block_state_not_overly_verbose",
+            "description": "The blocked_by field should not encode or reveal more detailed internal matching information (e.g., specific rule names, filter lists) than necessary for the caller to know that blocking occurred.",
+            "locally_satisfied": true,
+            "justification": "This function only assigns a generic constant kAdBlocked and does not propagate any finer-grained rule-identifying information."
+          },
+          {
+            "id": "block_decision_based_on_policy_only",
+            "description": "The decision to set blocked_by must be derived solely from policy-relevant flags (did_match_rule, did_match_exception, did_match_important) and not from sensitive user-specific data.",
+            "locally_satisfied": true,
+            "justification": "The code bases the blocked_by assignment purely on did_match_important or (did_match_rule && !did_match_exception); no other user-specific fields are consulted."
+          }
+        ]
+      },
+      {
+        "sink_id": "use of ctx->mock_data_url output from ShouldStartRequest",
+        "sink_description": "The mock_data_url field of the request context may be populated by ad_block_service and later used to serve synthetic content instead of the original network response.",
+        "required_conditions": [
+          {
+            "id": "mock_data_not_sensitive",
+            "description": "Any mock_data_url values produced by the service and stored in ctx->mock_data_url must not encode or embed sensitive user data that could be exposed when the mock content is served.",
+            "locally_satisfied": false,
+            "justification": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "OnBeforeURLRequestAdBlockTP",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-21323/snippet_1/code_before.cc",
+      "193-217"
+    ],
+    "function_name": "OnBeforeURLRequestAdBlockTP",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"url/url_canon.h\"\n#include \"ui/base/resource/resource_bundle.h\"\n#include \"services/network/network_context.h\"\n#include \"mojo/public/cpp/bindings/remote.h\"\n#include \"extensions/common/url_pattern.h\"\n#include \"content/public/browser/web_contents.h\"\n#include \"content/public/browser/storage_partition.h\"\n#include \"content/public/browser/render_frame_host.h\"\n#include \"content/public/browser/browser_thread.h\"\n#include \"content/public/browser/browser_context.h\"\n#include \"brave/grit/brave_generated_resources.h\"\n#include \"brave/components/brave_shields/common/brave_shield_constants.h\"\n#include \"brave/components/brave_shields/browser/brave_shields_web_contents_observer.h\"\n#include \"brave/components/brave_shields/browser/brave_shields_util.h\"\n#include \"brave/components/brave_shields/browser/ad_block_service.h\"\n#include \"brave/common/network_constants.h\"\n#include \"brave/browser/net/url_context.h\"\n#include \"brave/browser/brave_browser_process_impl.h\"\n#include \"base/strings/string_util.h\"\n#include \"base/base64url.h\"\n#include <vector>\n#include <utility>\n#include <string>\n#include <memory>\n#include \"brave/browser/net/brave_ad_block_tp_network_delegate_helper.h\"\n\nvoid OnBeforeURLRequestAdBlockTP(const ResponseCallback& next_callback,\n                                 std::shared_ptr<BraveRequestInfo> ctx) {\n  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);\n  // If the following info isn't available, then proper content settings can't\n  // be looked up, so do nothing.\n  if (ctx->tab_origin.is_empty() || !ctx->tab_origin.has_host() ||\n      ctx->request_url.is_empty()) {\n    return;\n  }\n  DCHECK_NE(ctx->request_identifier, 0UL);\n\n  scoped_refptr<base::SequencedTaskRunner> task_runner =\n      g_brave_browser_process->ad_block_service()->GetTaskRunner();\n\n  DCHECK(ctx->browser_context);\n  // DoH or standard DNS quries won't be routed through Tor, so we need to skip\n  // it.\n  if (ctx->browser_context->IsTor()) {\n    ShouldBlockAdWithOptionalCname(task_runner, std::move(next_callback), ctx,\n                                   base::nullopt);\n  } else {\n    new AdblockCnameResolveHostClient(std::move(next_callback), task_runner,\n                                      ctx);\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: ShouldBlockAdWithOptionalCname\nvoid ShouldBlockAdWithOptionalCname(\n    scoped_refptr<base::SequencedTaskRunner> task_runner,\n    const ResponseCallback& next_callback,\n    std::shared_ptr<BraveRequestInfo> ctx,\n    const base::Optional<std::string> cname) {\n  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);\n  task_runner->PostTaskAndReply(\n      FROM_HERE, base::BindOnce(&ShouldBlockAdOnTaskRunner, ctx, cname),\n      base::BindOnce(&OnShouldBlockAdResult, next_callback, ctx));\n}\n",
+    "sinks": [
+      {
+        "sink_id": "Early return when tab_origin/request_url missing",
+        "sink_description": "The function silently returns without invoking next_callback if tab_origin is empty, has no host, or request_url is empty. This determines whether downstream request metadata and ad-block decisions are exposed (or not) to the rest of the network stack.",
+        "required_conditions": [
+          {
+            "id": "safe_default_behavior_on_missing_context",
+            "description": "If required context (tab_origin with host and non-empty request_url) is missing, the default behavior of omitting the callback must not cause exposure of sensitive information (e.g., by unintentionally allowing or mis-routing the request).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "caller_handles_no_callback_path",
+            "description": "Callers must be designed to handle the case where next_callback is never invoked, without leaking internal state or sensitive error details to unauthorized parties.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "ShouldBlockAdWithOptionalCname / AdblockCnameResolveHostClient dispatch",
+        "sink_description": "Dispatches request context (BraveRequestInfo, including tab_origin and request_url) to an ad-blocking task on a background SequencedTaskRunner, where it will be further processed and may contribute to blocking decisions or logging.",
+        "required_conditions": [
+          {
+            "id": "ctx_contains_no_unnecessary_sensitive_data",
+            "description": "BraveRequestInfo passed to the ad-blocking machinery should not contain more sensitive information than necessary (e.g., secrets, credentials, or nonessential identifiers).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "adblock_pipeline_protects_context_data",
+            "description": "Downstream ad-block tasks and callbacks must avoid exposing ctx contents (such as full URLs or origins) to unauthorized actors, e.g., via logs, IPC, or network requests, unless properly anonymized or authorized.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "tor_handling_avoids_sensitive_dns_leakage",
+            "description": "For Tor browser_context, DNS- or CNAME-related processing must be done in a way that does not leak user browsing information outside the Tor routing or to unintended services.",
+            "locally_satisfied": true,
+            "justification": "The function explicitly checks browser_context->IsTor() and, in that case, bypasses AdblockCnameResolveHostClient (which would perform DNS/CNAME resolution) and instead calls ShouldBlockAdWithOptionalCname with base::nullopt, avoiding potential external DNS/CNAME queries for Tor traffic."
+          }
+        ]
+      }
+    ]
+  }
+]

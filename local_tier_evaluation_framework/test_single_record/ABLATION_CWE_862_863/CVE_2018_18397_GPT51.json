@@ -1,0 +1,74 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "userfaultfd_register",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2018-18397/repo/fs/userfaultfd.c",
+      "1277-1471"
+    ],
+    "function_name": "userfaultfd_register",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <linux/hugetlb.h>\n#include <linux/security.h>\n#include <linux/ioctl.h>\n#include <linux/mempolicy.h>\n#include <linux/userfaultfd_k.h>\n#include <linux/syscalls.h>\n#include <linux/anon_inodes.h>\n#include <linux/bug.h>\n#include <linux/file.h>\n#include <linux/seq_file.h>\n#include <linux/slab.h>\n#include <linux/poll.h>\n#include <linux/mm.h>\n#include <linux/sched/mm.h>\n#include <linux/sched/signal.h>\n#include <linux/hashtable.h>\n#include <linux/list.h>\n\nstatic int userfaultfd_register(struct userfaultfd_ctx *ctx,\n\t\t\t\tunsigned long arg)\n{\n\tstruct mm_struct *mm = ctx->mm;\n\tstruct vm_area_struct *vma, *prev, *cur;\n\tint ret;\n\tstruct uffdio_register uffdio_register;\n\tstruct uffdio_register __user *user_uffdio_register;\n\tunsigned long vm_flags, new_flags;\n\tbool found;\n\tbool basic_ioctls;\n\tunsigned long start, end, vma_end;\n\n\tuser_uffdio_register = (struct uffdio_register __user *) arg;\n\n\tret = -EFAULT;\n\tif (copy_from_user(&uffdio_register, user_uffdio_register,\n\t\t\t   sizeof(uffdio_register)-sizeof(__u64)))\n\t\tgoto out;\n\n\tret = -EINVAL;\n\tif (!uffdio_register.mode)\n\t\tgoto out;\n\tif (uffdio_register.mode & ~(UFFDIO_REGISTER_MODE_MISSING|\n\t\t\t\t     UFFDIO_REGISTER_MODE_WP))\n\t\tgoto out;\n\tvm_flags = 0;\n\tif (uffdio_register.mode & UFFDIO_REGISTER_MODE_MISSING)\n\t\tvm_flags |= VM_UFFD_MISSING;\n\tif (uffdio_register.mode & UFFDIO_REGISTER_MODE_WP) {\n\t\tvm_flags |= VM_UFFD_WP;\n\t\t/*\n\t\t * FIXME: remove the below error constraint by\n\t\t * implementing the wprotect tracking mode.\n\t\t */\n\t\tret = -EINVAL;\n\t\tgoto out;\n\t}\n\n\tret = validate_range(mm, uffdio_register.range.start,\n\t\t\t     uffdio_register.range.len);\n\tif (ret)\n\t\tgoto out;\n\n\tstart = uffdio_register.range.start;\n\tend = start + uffdio_register.range.len;\n\n\tret = -ENOMEM;\n\tif (!mmget_not_zero(mm))\n\t\tgoto out;\n\n\tdown_write(&mm->mmap_sem);\n\tvma = find_vma_prev(mm, start, &prev);\n\tif (!vma)\n\t\tgoto out_unlock;\n\n\t/* check that there's at least one vma in the range */\n\tret = -EINVAL;\n\tif (vma->vm_start >= end)\n\t\tgoto out_unlock;\n\n\t/*\n\t * If the first vma contains huge pages, make sure start address\n\t * is aligned to huge page size.\n\t */\n\tif (is_vm_hugetlb_page(vma)) {\n\t\tunsigned long vma_hpagesize = vma_kernel_pagesize(vma);\n\n\t\tif (start & (vma_hpagesize - 1))\n\t\t\tgoto out_unlock;\n\t}\n\n\t/*\n\t * Search for not compatible vmas.\n\t */\n\tfound = false;\n\tbasic_ioctls = false;\n\tfor (cur = vma; cur && cur->vm_start < end; cur = cur->vm_next) {\n\t\tcond_resched();\n\n\t\tBUG_ON(!!cur->vm_userfaultfd_ctx.ctx ^\n\t\t       !!(cur->vm_flags & (VM_UFFD_MISSING | VM_UFFD_WP)));\n\n\t\t/* check not compatible vmas */\n\t\tret = -EINVAL;\n\t\tif (!vma_can_userfault(cur))\n\t\t\tgoto out_unlock;\n\t\t/*\n\t\t * If this vma contains ending address, and huge pages\n\t\t * check alignment.\n\t\t */\n\t\tif (is_vm_hugetlb_page(cur) && end <= cur->vm_end &&\n\t\t    end > cur->vm_start) {\n\t\t\tunsigned long vma_hpagesize = vma_kernel_pagesize(cur);\n\n\t\t\tret = -EINVAL;\n\n\t\t\tif (end & (vma_hpagesize - 1))\n\t\t\t\tgoto out_unlock;\n\t\t}\n\n\t\t/*\n\t\t * Check that this vma isn't already owned by a\n\t\t * different userfaultfd. We can't allow more than one\n\t\t * userfaultfd to own a single vma simultaneously or we\n\t\t * wouldn't know which one to deliver the userfaults to.\n\t\t */\n\t\tret = -EBUSY;\n\t\tif (cur->vm_userfaultfd_ctx.ctx &&\n\t\t    cur->vm_userfaultfd_ctx.ctx != ctx)\n\t\t\tgoto out_unlock;\n\n\t\t/*\n\t\t * Note vmas containing huge pages\n\t\t */\n\t\tif (is_vm_hugetlb_page(cur))\n\t\t\tbasic_ioctls = true;\n\n\t\tfound = true;\n\t}\n\tBUG_ON(!found);\n\n\tif (vma->vm_start < start)\n\t\tprev = vma;\n\n\tret = 0;\n\tdo {\n\t\tcond_resched();\n\n\t\tBUG_ON(!vma_can_userfault(vma));\n\t\tBUG_ON(vma->vm_userfaultfd_ctx.ctx &&\n\t\t       vma->vm_userfaultfd_ctx.ctx != ctx);\n\n\t\t/*\n\t\t * Nothing to do: this vma is already registered into this\n\t\t * userfaultfd and with the right tracking mode too.\n\t\t */\n\t\tif (vma->vm_userfaultfd_ctx.ctx == ctx &&\n\t\t    (vma->vm_flags & vm_flags) == vm_flags)\n\t\t\tgoto skip;\n\n\t\tif (vma->vm_start > start)\n\t\t\tstart = vma->vm_start;\n\t\tvma_end = min(end, vma->vm_end);\n\n\t\tnew_flags = (vma->vm_flags & ~vm_flags) | vm_flags;\n\t\tprev = vma_merge(mm, prev, start, vma_end, new_flags,\n\t\t\t\t vma->anon_vma, vma->vm_file, vma->vm_pgoff,\n\t\t\t\t vma_policy(vma),\n\t\t\t\t ((struct vm_userfaultfd_ctx){ ctx }));\n\t\tif (prev) {\n\t\t\tvma = prev;\n\t\t\tgoto next;\n\t\t}\n\t\tif (vma->vm_start < start) {\n\t\t\tret = split_vma(mm, vma, start, 1);\n\t\t\tif (ret)\n\t\t\t\tbreak;\n\t\t}\n\t\tif (vma->vm_end > end) {\n\t\t\tret = split_vma(mm, vma, end, 0);\n\t\t\tif (ret)\n\t\t\t\tbreak;\n\t\t}\n\tnext:\n\t\t/*\n\t\t * In the vma_merge() successful mprotect-like case 8:\n\t\t * the next vma was merged into the current one and\n\t\t * the current one has not been updated yet.\n\t\t */\n\t\tvma->vm_flags = new_flags;\n\t\tvma->vm_userfaultfd_ctx.ctx = ctx;\n\n\tskip:\n\t\tprev = vma;\n\t\tstart = vma->vm_end;\n\t\tvma = vma->vm_next;\n\t} while (vma && vma->vm_start < end);\nout_unlock:\n\tup_write(&mm->mmap_sem);\n\tmmput(mm);\n\tif (!ret) {\n\t\t/*\n\t\t * Now that we scanned all vmas we can already tell\n\t\t * userland which ioctls methods are guaranteed to\n\t\t * succeed on this range.\n\t\t */\n\t\tif (put_user(basic_ioctls ? UFFD_API_RANGE_IOCTLS_BASIC :\n\t\t\t     UFFD_API_RANGE_IOCTLS,\n\t\t\t     &user_uffdio_register->ioctls))\n\t\t\tret = -EFAULT;\n\t}\nout:\n\treturn ret;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: vma_policy\nstatic inline void hugetlb_drop_vma_policy(struct vm_area_struct *vma)\n{\n}\n\nCallee: min\nint get_dominating_id(struct mount *mnt, const struct path *root)\n{\n\tstruct mount *m;\n\n\tfor (m = mnt->mnt_master; m != NULL; m = m->mnt_master) {\n\t\tstruct mount *d = get_peer_under_root(m, mnt->mnt_ns, root);\n\t\tif (d)\n\t\t\treturn d->mnt_group_id;\n\t}\n\n\treturn 0;\n}\n\nCallee: vma_can_userfault\nstatic inline bool vma_can_userfault(struct vm_area_struct *vma)\n{\n\treturn vma_is_anonymous(vma) || is_vm_hugetlb_page(vma) ||\n\t\tvma_is_shmem(vma);\n}\n\nCallee: validate_range\nstatic __always_inline int validate_range(struct mm_struct *mm,\n\t\t\t\t\t  __u64 start, __u64 len)\n{\n\t__u64 task_size = mm->task_size;\n\n\tif (start & ~PAGE_MASK)\n\t\treturn -EINVAL;\n\tif (len & ~PAGE_MASK)\n\t\treturn -EINVAL;\n\tif (!len)\n\t\treturn -EINVAL;\n\tif (start < mmap_min_addr)\n\t\treturn -EINVAL;\n\tif (start >= task_size)\n\t\treturn -EINVAL;\n\tif (len > task_size - start)\n\t\treturn -EINVAL;\n\treturn 0;\n}\n\nCallee: copy_from_user\nstatic long exact_copy_from_user(void *to, const void __user * from,\n\t\t\t\t unsigned long n)\n{\n\tchar *t = to;\n\tconst char __user *f = from;\n\tchar c;\n\n\tif (!access_ok(VERIFY_READ, from, n))\n\t\treturn n;\n\n\tcurrent->kernel_uaccess_faults_ok++;\n\twhile (n) {\n\t\tif (__get_user(c, f)) {\n\t\t\tmemset(t, 0, n);\n\t\t\tbreak;\n\t\t}\n\t\t*t++ = c;\n\t\tf++;\n\t\tn--;\n\t}\n\tcurrent->kernel_uaccess_faults_ok--;\n\treturn n;\n}\n",
+    "sinks": [
+      {
+        "sink_id": "userfaultfd_register ioctl handling",
+        "sink_description": "Registers a user-provided address range in the process mm_struct for userfaultfd handling by marking VMAs with VM_UFFD_* flags and associating them with the userfaultfd context (ctx). This changes which faults are intercepted and which fd receives them.",
+        "required_conditions": [
+          {
+            "id": "range_within_task_and_page_aligned",
+            "description": "The requested range (start, len) must be page-aligned, non-zero, within the calling mm_struct task_size, and not below mmap_min_addr.",
+            "locally_satisfied": true,
+            "justification": "validate_range(mm, uffdio_register.range.start, uffdio_register.range.len) is called and any non-zero return aborts before modifying VMAs."
+          },
+          {
+            "id": "mode_supported_and_nonzero",
+            "description": "The requested registration mode must be non-zero and only contain supported flags (currently MISSING and/or WP).",
+            "locally_satisfied": true,
+            "justification": "The function checks !uffdio_register.mode and masks against ~(UFFDIO_REGISTER_MODE_MISSING|UFFDIO_REGISTER_MODE_WP), returning -EINVAL on violation. WP is currently rejected unconditionally with -EINVAL."
+          },
+          {
+            "id": "mm_struct_still_valid",
+            "description": "The mm_struct associated with the userfaultfd context must still be alive (have a non-zero reference count) when performing registration.",
+            "locally_satisfied": true,
+            "justification": "mmget_not_zero(mm) is called and on failure the function returns without touching VMAs."
+          },
+          {
+            "id": "vmas_exist_and_cover_range",
+            "description": "There must be at least one VMA intersecting the requested range, and the first VMA must start before end.",
+            "locally_satisfied": true,
+            "justification": "find_vma_prev(mm, start, &prev) must return a vma and the code checks vma->vm_start < end; otherwise it aborts with -EINVAL."
+          },
+          {
+            "id": "vmas_are_userfault_eligible",
+            "description": "All VMAs in the requested range must be of a type for which userfaultfd registration is allowed (anonymous, hugetlb, or shmem).",
+            "locally_satisfied": true,
+            "justification": "The loop over cur checks vma_can_userfault(cur); on failure it sets ret=-EINVAL and jumps to out_unlock before modifying VMAs."
+          },
+          {
+            "id": "vmas_not_owned_by_other_ctx",
+            "description": "No VMA in the requested range may already be associated with a different userfaultfd context.",
+            "locally_satisfied": true,
+            "justification": "The loop checks cur->vm_userfaultfd_ctx.ctx && cur->vm_userfaultfd_ctx.ctx != ctx and on true returns -EBUSY before any changes."
+          },
+          {
+            "id": "hugetlb_alignment",
+            "description": "If the range intersects VMAs backed by huge pages, both the start and end addresses must be aligned to the corresponding huge page size.",
+            "locally_satisfied": true,
+            "justification": "The function checks alignment for start when the first VMA is hugetlb and, in the loop, checks end alignment for any hugetlb VMA that contains the end; misalignment causes -EINVAL before registration."
+          },
+          {
+            "id": "mmap_sem_write_lock_held",
+            "description": "The caller must hold the mm->mmap_sem write lock while modifying VMAs for registration.",
+            "locally_satisfied": true,
+            "justification": "down_write(&mm->mmap_sem) is taken before any VMA walk or modification and up_write(&mm->mmap_sem) is executed on all exit paths before returning."
+          },
+          {
+            "id": "user_buffer_writeable_for_result",
+            "description": "The user-supplied uffdio_register structure must be writable when returning the supported ioctls mask.",
+            "locally_satisfied": true,
+            "justification": "put_user(..., &user_uffdio_register->ioctls) is used and on failure ret is set to -EFAULT so the caller sees an error rather than a partially registered but misreported capability."
+          }
+        ]
+      }
+    ]
+  }
+]

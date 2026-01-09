@@ -1,0 +1,80 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "shm_create",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2020-29074/repo/src/scan.c",
+      "247-372"
+    ],
+    "function_name": "shm_create",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <default8x16.h>\n#include \"userinput.h\"\n#include \"macosx.h\"\n#include \"screen.h\"\n#include \"unixpw.h\"\n#include \"cleanup.h\"\n#include \"pointer.h\"\n#include \"screen.h\"\n#include \"8to24.h\"\n#include \"win_utils.h\"\n#include \"xrandr.h\"\n#include \"xdamage.h\"\n#include \"xwrappers.h\"\n#include \"xinerama.h\"\n#include \"x11vnc.h\"\n\nvoid shm_delete(XShmSegmentInfo *shm);\nvoid shm_clean(XShmSegmentInfo *shm, XImage *xim);\nstatic char *flip_ximage_byte_order(XImage *xim);\nstatic int shm_create(XShmSegmentInfo *shm, XImage **ximg_ptr, int w, int h,\n    char *name);\n\nstatic int shm_create(XShmSegmentInfo *shm, XImage **ximg_ptr, int w, int h,\n    char *name) {\n\n\tXImage *xim;\n\tstatic int reported_flip = 0;\n\tint db = 0;\n\n\tshm->shmid = -1;\n\tshm->shmaddr = (char *) -1;\n\t*ximg_ptr = NULL;\n\n\tif (nofb) {\n\t\treturn 1;\n\t}\n\n\tX_LOCK;\n\n\tif (! using_shm || xform24to32 || raw_fb) {\n\t\t/* we only need the XImage created */\n\t\txim = XCreateImage_wr(dpy, default_visual, depth, ZPixmap,\n\t\t    0, NULL, w, h, raw_fb ? 32 : BitmapPad(dpy), 0);\n\n\t\tX_UNLOCK;\n\n\t\tif (xim == NULL) {\n\t\t\trfbErr(\"XCreateImage(%s) failed.\\n\", name);\n\t\t\tif (quiet) {\n\t\t\t\tfprintf(stderr, \"XCreateImage(%s) failed.\\n\",\n\t\t\t\t    name);\n\t\t\t}\n\t\t\treturn 0;\n\t\t}\n\t\tif (db) fprintf(stderr, \"shm_create simple %d %d\\t%p %s\\n\", w, h, (void *)xim, name);\n\t\txim->data = (char *) malloc(xim->bytes_per_line * xim->height);\n\t\tif (xim->data == NULL) {\n\t\t\trfbErr(\"XCreateImage(%s) data malloc failed.\\n\", name);\n\t\t\tif (quiet) {\n\t\t\t\tfprintf(stderr, \"XCreateImage(%s) data malloc\"\n\t\t\t\t    \" failed.\\n\", name);\n\t\t\t}\n\t\t\treturn 0;\n\t\t}\n\t\tif (flip_byte_order) {\n\t\t\tchar *order = flip_ximage_byte_order(xim);\n\t\t\tif (! reported_flip && ! quiet) {\n\t\t\t\trfbLog(\"Changing XImage byte order\"\n\t\t\t\t    \" to %s\\n\", order);\n\t\t\t\treported_flip = 1;\n\t\t\t}\n\t\t}\n\n\t\t*ximg_ptr = xim;\n\t\treturn 1;\n\t}\n\n\tif (! dpy) {\n\t\tX_UNLOCK;\n\t\treturn 0;\n\t}\n\n\txim = XShmCreateImage_wr(dpy, default_visual, depth, ZPixmap, NULL,\n\t    shm, w, h);\n\n\tif (xim == NULL) {\n\t\trfbErr(\"XShmCreateImage(%s) failed.\\n\", name);\n\t\tif (quiet) {\n\t\t\tfprintf(stderr, \"XShmCreateImage(%s) failed.\\n\", name);\n\t\t}\n\t\tX_UNLOCK;\n\t\treturn 0;\n\t}\n\n\t*ximg_ptr = xim;\n\n#if HAVE_XSHM\n\tshm->shmid = shmget(IPC_PRIVATE,\n\t    xim->bytes_per_line * xim->height, IPC_CREAT | 0777);\n\n\tif (shm->shmid == -1) {\n\t\trfbErr(\"shmget(%s) failed.\\n\", name);\n\t\trfbLogPerror(\"shmget\");\n\n\t\tXDestroyImage(xim);\n\t\t*ximg_ptr = NULL;\n\n\t\tX_UNLOCK;\n\t\treturn 0;\n\t}\n\n\tshm->shmaddr = xim->data = (char *) shmat(shm->shmid, 0, 0);\n\n\tif (shm->shmaddr == (char *)-1) {\n\t\trfbErr(\"shmat(%s) failed.\\n\", name);\n\t\trfbLogPerror(\"shmat\");\n\n\t\tXDestroyImage(xim);\n\t\t*ximg_ptr = NULL;\n\n\t\tshmctl(shm->shmid, IPC_RMID, 0);\n\t\tshm->shmid = -1;\n\n\t\tX_UNLOCK;\n\t\treturn 0;\n\t}\n\n\tshm->readOnly = False;\n\n\tif (! XShmAttach_wr(dpy, shm)) {\n\t\trfbErr(\"XShmAttach(%s) failed.\\n\", name);\n\t\tXDestroyImage(xim);\n\t\t*ximg_ptr = NULL;\n\n\t\tshmdt(shm->shmaddr);\n\t\tshm->shmaddr = (char *) -1;\n\n\t\tshmctl(shm->shmid, IPC_RMID, 0);\n\t\tshm->shmid = -1;\n\n\t\tX_UNLOCK;\n\t\treturn 0;\n\t}\n#endif\n\n\tX_UNLOCK;\n\treturn 1;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: XShmAttach_wr\nStatus XShmAttach_wr(Display *disp, XShmSegmentInfo *shminfo) {\n#if HAVE_XSHM\n\treturn XShmAttach(disp, shminfo);\n#else\n\tif (!disp || !shminfo) {}\n\treturn (Status) 0;\n#endif\n}\n\nCallee: XShmCreateImage_wr\nXImage *XShmCreateImage_wr(Display* disp, Visual* vis, unsigned int depth,\n    int format, char* data, XShmSegmentInfo* shminfo, unsigned int width,\n    unsigned int height) {\n\n#if HAVE_XSHM\n\treturn XShmCreateImage(disp, vis, depth, format, data, shminfo,\n\t    width, height); \n#else\n\tif (!disp || !vis || !depth || !format || !data || !shminfo || !width || !height) {}\n\treturn (XImage *) 0;\n#endif\n}\n\nCallee: flip_ximage_byte_order\nstatic char *flip_ximage_byte_order(XImage *xim) {\n\tchar *order;\n\tif (xim->byte_order == LSBFirst) {\n\t\torder = \"MSBFirst\";\n\t\txim->byte_order = MSBFirst;\n\t\txim->bitmap_bit_order = MSBFirst;\n\t} else {\n\t\torder = \"LSBFirst\";\n\t\txim->byte_order = LSBFirst;\n\t\txim->bitmap_bit_order = LSBFirst;\n\t}\n\treturn order;\n}\n\nCallee: XCreateImage_wr\nXImage *XCreateImage_wr(Display *disp, Visual *visual, unsigned int depth,\n    int format, int offset, char *data, unsigned int width,\n    unsigned int height, int bitmap_pad, int bytes_per_line) {\n\t/*\n\t * This is a kludge to get a created XImage to exactly match what\n\t * XReadScreen returns: we noticed the rgb masks are different\n\t * from XCreateImage with the high color visual (red mask <->\n\t * blue mask).  Note we read from the root window(!) then free\n\t * the data.\n\t */\n\n\tif (raw_fb) {\t/* raw_fb hack */\n\t\tXImage *xi;\n\t\txi = (XImage *) malloc(sizeof(XImage));\n\t\tmemset(xi, 0, sizeof(XImage));\n\t\txi->depth = depth;\n\t\tif (depth >= 24) {\n\t\t\txi->bits_per_pixel = 32;\n\t\t} else if (depth > 16) {\n\t\t\txi->bits_per_pixel = 24;\n\t\t} else if (depth > 8) {\n\t\t\txi->bits_per_pixel = 16;\n\t\t} else {\n\t\t\txi->bits_per_pixel = 8;\n\t\t}\n\t\txi->format = format;\n\t\txi->xoffset = offset;\n\t\txi->data = data;\n\t\txi->width = width;\n\t\txi->height = height;\n\t\txi->bitmap_pad = bitmap_pad;\n\t\txi->bytes_per_line = bytes_per_line ? bytes_per_line : \n\t\t    xi->width * xi->bits_per_pixel / 8;\n\t\txi->bitmap_unit = -1;\t/* hint to not call XDestroyImage */\n\t\treturn xi;\n\t}\n\n#if NO_X11\n\tnox11_exit(1);\n\tif (!disp || !visual || !depth || !format || !offset || !data || !width\n\t    || !height || !width || !bitmap_pad || !bytes_per_line) {}\n\treturn NULL;\n#else\n\tif (overlay) {\n\t\tXImage *xi;\n\t\txi = xreadscreen(disp, window, 0, 0, width, height, False);\n\t\tif (xi == NULL) {\n\t\t\treturn xi;\n\t\t}\n\t\tif (xi->data != NULL) {\n\t\t\tfree(xi->data);\n\t\t}\n\t\txi->data = data;\n\t\treturn xi;\n\t}\n\n\treturn XCreateImage(disp, visual, depth, format, offset, data,\n\t    width, height, bitmap_pad, bytes_per_line);\n#endif\t/* NO_X11 */\n}\n",
+    "sinks": [
+      {
+        "sink_id": "shmget / shmat / shmctl on IPC_PRIVATE segment",
+        "sink_description": "Creation and management of a System V shared memory segment with world-accessible permissions for use as an X11 shared memory image buffer.",
+        "required_conditions": [
+          {
+            "id": "shm_use_authorized",
+            "description": "Only authorized, trusted code should be able to trigger creation and attachment of a new shared memory segment for framebuffer data.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "shm_permissions_safe",
+            "description": "The shared memory segment must be created with permissions appropriate to the intended trust boundary (e.g., not world-readable/writable if that would expose sensitive data or allow tampering).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "display_handle_valid",
+            "description": "The X11 display connection (dpy) must be valid before attempting XShm operations that act on behalf of the process.",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (! dpy) { X_UNLOCK; return 0; }` before invoking `XShmCreateImage_wr` and subsequent shared memory operations."
+          }
+        ]
+      },
+      {
+        "sink_id": "XShmAttach_wr(dpy, shm)",
+        "sink_description": "Attaches the created shared memory segment to the X server for use in XShm image transport, affecting server-side behavior and access to the segment.",
+        "required_conditions": [
+          {
+            "id": "xshm_attach_authorized",
+            "description": "Only callers with appropriate rights to interact with the X server and share memory segments should be able to request XShmAttach.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "valid_shm_segment_before_attach",
+            "description": "The shared memory segment must be successfully created and attached in the local process before requesting XShmAttach on it.",
+            "locally_satisfied": true,
+            "justification": "`XShmAttach_wr` is only called after `shmget` and `shmat` have succeeded and `shm->shmaddr` and `shm->shmid` are checked for errors; on failure paths, the function cleans up and returns before reaching the attach call."
+          }
+        ]
+      },
+      {
+        "sink_id": "XCreateImage_wr / XShmCreateImage_wr",
+        "sink_description": "Creation of XImage structures tied to the process display, including potential use of shared memory; this affects how the process interacts with the X server and manages pixel buffers.",
+        "required_conditions": [
+          {
+            "id": "display_and_visual_valid",
+            "description": "The X11 display and visual used to create the image must refer to a valid, intended X server connection and visual configuration.",
+            "locally_satisfied": true,
+            "justification": "Both creation paths require `dpy` and `default_visual`; for the SHM path there is an explicit `if (! dpy) { X_UNLOCK; return 0; }` check, and the non-SHM path is guarded by the global mode flags `using_shm`, `xform24to32`, and `raw_fb`, implying controlled internal use rather than arbitrary caller choice."
+          }
+        ]
+      },
+      {
+        "sink_id": "flip_ximage_byte_order(xim) and modification of XImage fields",
+        "sink_description": "Modification of the XImage byte order and bitmap bit order, which affects how pixel data is interpreted and rendered when interacting with the X server or clients.",
+        "required_conditions": [
+          {
+            "id": "byte_order_change_intended",
+            "description": "Changing the XImage byte order must only occur when intended by trusted configuration, as it can affect correctness of display and potentially data interpretation.",
+            "locally_satisfied": true,
+            "justification": "The change is gated on the internal configuration flag `flip_byte_order` and only applied after successful XImage allocation within this function; no external, unvalidated input is used to decide this behavior."
+          }
+        ]
+      }
+    ]
+  }
+]

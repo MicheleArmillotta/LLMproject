@@ -1,0 +1,891 @@
+
+
+#####################################CWE-200 EXAMPLES (CVE-2014-2567)#################################
+
+1. INPUT
+
+MAIN
+
+bool OpenConnectionTask::handleStateHelper(const Imap::Responses::State *const resp)
+{
+    if (_dead) {
+        _failed("Asked to die");
+        return true;
+    }
+    using namespace Imap::Responses;
+
+    if (model->accessParser(parser).connState == CONN_STATE_CONNECTED_PRETLS_PRECAPS) {
+        if (!resp->tag.isEmpty()) {
+            throw Imap::UnexpectedResponseReceived("Waiting for initial OK/BYE/PREAUTH, but got tagged response instead", *resp);
+        }
+    } else if (model->accessParser(parser).connState > CONN_STATE_CONNECTED_PRETLS_PRECAPS) {
+        if (resp->tag.isEmpty()) {
+            return false;
+        }
+    }
+
+    switch (model->accessParser(parser).connState) {
+
+    case CONN_STATE_AUTHENTICATED:
+    case CONN_STATE_SELECTING:
+    case CONN_STATE_SYNCING:
+    case CONN_STATE_SELECTED:
+    case CONN_STATE_FETCHING_PART:
+    case CONN_STATE_FETCHING_MSG_METADATA:
+    case CONN_STATE_LOGOUT:
+    {
+        QByteArray message = "No response expected by the OpenConnectionTask in state " +
+                Imap::connectionStateToString(model->accessParser(parser).connState).toUtf8();
+        // These shall not ever be reached by this code
+        throw Imap::UnexpectedResponseReceived(message.constData(), *resp);
+    }
+
+    case CONN_STATE_NONE:
+    case CONN_STATE_HOST_LOOKUP:
+    case CONN_STATE_CONNECTING:
+        // Looks like the corresponding stateChanged() signal could be delayed, at least with QProcess-based sockets
+    case CONN_STATE_CONNECTED_PRETLS_PRECAPS:
+        // We're connected now -- this is our initial state.
+    {
+        switch (resp->kind) {
+        case PREAUTH:
+            // Cool, we're already authenticated. Now, let's see if we have to issue CAPABILITY or if we already know that
+            if (model->accessParser(parser).capabilitiesFresh) {
+                // We're alsmost done here, apart from compression
+                if (TROJITA_COMPRESS_DEFLATE && model->accessParser(parser).capabilities.contains(QLatin1String("COMPRESS=DEFLATE"))) {
+                    compressCmd = parser->compressDeflate();
+                    model->changeConnectionState(parser, CONN_STATE_COMPRESS_DEFLATE);
+                } else {
+                    // really done
+                    model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED);
+                    onComplete();
+                }
+            } else {
+                model->changeConnectionState(parser, CONN_STATE_POSTAUTH_PRECAPS);
+                capabilityCmd = parser->capability();
+            }
+            return true;
+
+        case OK:
+            if (!model->accessParser(parser).capabilitiesFresh) {
+                model->changeConnectionState(parser, CONN_STATE_CONNECTED_PRETLS);
+                capabilityCmd = parser->capability();
+            } else {
+                startTlsOrLoginNow();
+            }
+            return true;
+
+        case BYE:
+            logout(tr("Server has closed the connection"));
+            return true;
+
+        case BAD:
+            model->changeConnectionState(parser, CONN_STATE_LOGOUT);
+            // If it was an ALERT, we've already warned the user
+            if (resp->respCode != ALERT) {
+                emit model->alertReceived(tr("The server replied with the following BAD response:\n%1").arg(resp->message));
+            }
+            logout(tr("Server has greeted us with a BAD response"));
+            return true;
+
+        default:
+            throw Imap::UnexpectedResponseReceived("Waiting for initial OK/BYE/BAD/PREAUTH, but got this instead", *resp);
+        }
+        break;
+    }
+
+    case CONN_STATE_CONNECTED_PRETLS:
+        // We've asked for capabilities upon the initial interaction
+    {
+        bool wasCaps = checkCapabilitiesResult(resp);
+        if (wasCaps && !_finished) {
+            startTlsOrLoginNow();
+        }
+        return wasCaps;
+    }
+
+    case CONN_STATE_STARTTLS_ISSUED:
+    {
+        if (resp->tag == startTlsCmd) {
+            if (resp->kind == OK) {
+                model->changeConnectionState(parser, CONN_STATE_STARTTLS_HANDSHAKE);
+                if (!model->m_startTls) {
+                    // The model was not configured to perform STARTTLS, but we still did that for some reason.
+                    // As suggested by Mike Cardwell on the trojita ML (http://article.gmane.org/gmane.mail.trojita.general/299),
+                    // it makes sense to make this settings permanent, so that a user is not tricked into revealing their
+                    // password when a MITM removes the LOGINDISABLED in future.
+                    EMIT_LATER_NOARG(model, requireStartTlsInFuture);
+                }
+            } else {
+                logout(tr("STARTTLS failed: %1").arg(resp->message));
+            }
+            return true;
+        }
+        return false;
+    }
+
+    case CONN_STATE_SSL_HANDSHAKE:
+    case CONN_STATE_STARTTLS_HANDSHAKE:
+        // nothing should really arrive at this point; the Parser is expected to wait for encryption and only after that
+        // send the data
+        Q_ASSERT(false);
+        return false;
+
+    case CONN_STATE_STARTTLS_VERIFYING:
+    case CONN_STATE_SSL_VERIFYING:
+    {
+        // We're waiting for a decision based on a policy, so we do not really expect any network IO at this point
+        // FIXME: an assert(false) here?
+        qDebug() << "OpenConnectionTask: ignoring response, we're still waiting for SSL policy decision";
+        return false;
+    }
+
+    case CONN_STATE_ESTABLISHED_PRECAPS:
+        // Connection is established and we're waiting for updated capabilities
+    {
+        bool wasCaps = checkCapabilitiesResult(resp);
+        if (wasCaps && !_finished) {
+            if (model->accessParser(parser).capabilities.contains(QLatin1String("LOGINDISABLED"))) {
+                logout(tr("Capabilities still contain LOGINDISABLED even after STARTTLS"));
+            } else {
+                model->changeConnectionState(parser, CONN_STATE_LOGIN);
+                askForAuth();
+            }
+        }
+        return wasCaps;
+    }
+
+    case CONN_STATE_LOGIN:
+        // Check the result of the LOGIN command
+    {
+        if (resp->tag == loginCmd) {
+            loginCmd.clear();
+            // The LOGIN command is finished
+            if (resp->kind == OK) {
+                if (resp->respCode == CAPABILITIES || model->accessParser(parser).capabilitiesFresh) {
+                    // Capabilities are already known
+                    if (TROJITA_COMPRESS_DEFLATE && model->accessParser(parser).capabilities.contains(QLatin1String("COMPRESS=DEFLATE"))) {
+                        compressCmd = parser->compressDeflate();
+                        model->changeConnectionState(parser, CONN_STATE_COMPRESS_DEFLATE);
+                    } else {
+                        model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED);
+                        onComplete();
+                    }
+                } else {
+                    // Got to ask for the capabilities
+                    model->changeConnectionState(parser, CONN_STATE_POSTAUTH_PRECAPS);
+                    capabilityCmd = parser->capability();
+                }
+            } else {
+                // Login failed
+                QString message;
+                switch (resp->respCode) {
+                case Responses::UNAVAILABLE:
+                    message = tr("Temporary failure because a subsystem is down.");
+                    break;
+                case Responses::AUTHENTICATIONFAILED:
+                    message = tr("Authentication failed.  This often happens due to bad password or wrong user name.");
+                    break;
+                case Responses::AUTHORIZATIONFAILED:
+                    message = tr("Authentication succeeded in using the authentication identity, "
+                                 "but the server cannot or will not allow the authentication "
+                                 "identity to act as the requested authorization identity.");
+                    break;
+                case Responses::EXPIRED:
+                    message = tr("Either authentication succeeded or the server no longer had the "
+                                 "necessary data; either way, access is no longer permitted using "
+                                 "that passphrase.  You should get a new passphrase.");
+                    break;
+                case Responses::PRIVACYREQUIRED:
+                    message = tr("The operation is not permitted due to a lack of privacy.");
+                    break;
+                case Responses::CONTACTADMIN:
+                    message = tr("You should contact the system administrator or support desk.");
+                    break;
+                default:
+                    break;
+                }
+
+                if (message.isEmpty()) {
+                    message = tr("Login failed: %1").arg(resp->message);
+                } else {
+                    message = tr("%1\n\n%2").arg(message, resp->message);
+                }
+                EMIT_LATER(model, authAttemptFailed, Q_ARG(QString, message));
+                model->m_imapPassword.clear();
+                model->m_hasImapPassword = false;
+                if (model->accessParser(parser).connState == CONN_STATE_LOGOUT) {
+                    // The server has closed the conenction
+                    _failed(QLatin1String("Connection closed after a failed login"));
+                    return true;
+                }
+                askForAuth();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    case CONN_STATE_POSTAUTH_PRECAPS:
+    {
+        bool wasCaps = checkCapabilitiesResult(resp);
+        if (wasCaps && !_finished) {
+            model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED);
+            onComplete();
+        }
+        return wasCaps;
+    }
+
+    case CONN_STATE_COMPRESS_DEFLATE:
+        if (resp->tag == compressCmd) {
+            model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED);
+            onComplete();
+            return true;
+        } else {
+            return false;
+        }
+        break;
+
+    }
+
+    // Required catch-all for OpenSuSE's build service (Tumbleweed, 2012-04-03)
+    Q_ASSERT(false);
+    return false;
+}
+
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Callee name:onComplete
+void OpenConnectionTask::onComplete()
+{
+    // Optionally issue the ID command
+    if (model->accessParser(parser).capabilities.contains(QLatin1String("ID"))) {
+        Imap::Mailbox::ImapTask *task =
+            model->m_taskFactory->createIdTask(model, this);
+        task->perform();
+    }
+
+    // Optionally enable QRESYNC
+    if (model->accessParser(parser).capabilities.contains(QLatin1String("QRESYNC")) &&
+        model->accessParser(parser).capabilities.contains(QLatin1String("ENABLE")))
+    {
+        Imap::Mailbox::ImapTask *task =
+            model->m_taskFactory->createEnableTask(
+                model,
+                this,
+                QList<QByteArray>() << QByteArray("QRESYNC")
+            );
+        task->perform();
+    }
+
+    // But do terminate this task
+    _completed();
+}
+
+Callee name:checkCapabilitiesResult
+bool OpenConnectionTask::checkCapabilitiesResult(const Responses::State *const resp)
+{
+    if (resp->tag.isEmpty())
+        return false;
+
+    if (resp->tag == capabilityCmd) {
+        if (!model->accessParser(parser).capabilitiesFresh) {
+            logout(tr("Server did not provide useful capabilities"));
+            return true;
+        }
+
+        if (resp->kind != Responses::OK) {
+            logout(tr("CAPABILITIES command has failed"));
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+Callee name:askForAuth
+void OpenConnectionTask::askForAuth()
+{
+    if (model->m_hasImapPassword) {
+        Q_ASSERT(loginCmd.isEmpty());
+        loginCmd = parser->login(model->m_imapUser, model->m_imapPassword);
+        model->accessParser(parser).capabilitiesFresh = false;
+    } else {
+        EMIT_LATER_NOARG(model, authRequested);
+    }
+}
+
+Callee name:_failed
+void ThreadTask::_failed(const QString &errorMessage)
+{
+    // FIXME: show this in the GUI
+    emit model->threadingFailed(mailboxIndex, algorithm, searchCriteria);
+    ImapTask::_failed(errorMessage);
+}
+
+Callee name:clear
+void QMimeTypePrivate::clear()
+{
+    name.clear();
+    localeComments.clear();
+    genericIconName.clear();
+    iconName.clear();
+    globPatterns.clear();
+    loaded = false;
+}
+
+Callee name:NumberOfMessagesTask
+NumberOfMessagesTask::NumberOfMessagesTask(Model *model, const QModelIndex &mailbox) :
+    ImapTask(model), mailboxIndex(mailbox)
+{
+    Q_ASSERT(dynamic_cast<TreeItemMailbox *>(static_cast<TreeItem *>(mailbox.internalPointer())));
+    conn = model->m_taskFactory->createGetAnyConnectionTask(model);
+    conn->addDependentTask(this);
+}
+
+Callee name:handleSocketEncryptedResponse
+bool OpenConnectionTask::handleSocketEncryptedResponse(const Responses::SocketEncryptedResponse *const resp)
+{
+    switch (model->accessParser(parser).connState) {
+    case CONN_STATE_SSL_HANDSHAKE:
+        model->changeConnectionState(parser, CONN_STATE_SSL_VERIFYING);
+        m_sslChain = resp->sslChain;
+        m_sslErrors = resp->sslErrors;
+        model->processSslErrors(this);
+        return true;
+
+    case CONN_STATE_STARTTLS_HANDSHAKE:
+        model->changeConnectionState(parser, CONN_STATE_STARTTLS_VERIFYING);
+        m_sslChain = resp->sslChain;
+        m_sslErrors = resp->sslErrors;
+        model->processSslErrors(this);
+        return true;
+
+    default:
+        qDebug() << model->accessParser(parser).connState;
+        return false;
+    }
+}
+
+Callee name:capability
+CommandHandle Parser::capability()
+{
+    // CAPABILITY should take precedence over LOGIN, because we have to check for LOGINDISABLED
+    return queueCommand(
+        Commands::Command()
+        << Commands::PartOfCommand(Commands::ATOM, "CAPABILITY")
+    );
+}
+
+Callee name:compressDeflate
+CommandHandle Parser::compressDeflate()
+{
+    return queueCommand(
+        Commands::Command()
+        << Commands::PartOfCommand(Commands::COMPRESS_DEFLATE, "COMPRESS DEFLATE")
+    );
+}
+
+Callee name:logout
+void OpenConnectionTask::logout(const QString &message)
+{
+    _failed(message);
+    model->setNetworkPolicy(NETWORK_OFFLINE);
+}
+
+Callee name:startTlsOrLoginNow
+void OpenConnectionTask::startTlsOrLoginNow()
+{
+    if (model->m_startTls ||
+        model->accessParser(parser).capabilities.contains(QLatin1String("LOGINDISABLED")))
+    {
+        // Should run STARTTLS later and already have the capabilities
+        Q_ASSERT(model->accessParser(parser).capabilitiesFresh);
+
+        if (!model->accessParser(parser).capabilities.contains(QLatin1String("STARTTLS"))) {
+            logout(tr("Server does not support STARTTLS"));
+        } else {
+            startTlsCmd = parser->startTls();
+            model->changeConnectionState(parser, CONN_STATE_STARTTLS_ISSUED);
+        }
+    } else {
+        // We're requested to authenticate even without STARTTLS
+        Q_ASSERT(!model->accessParser(parser).capabilities.contains(QLatin1String("LOGINDISABLED")));
+        model->changeConnectionState(parser, CONN_STATE_LOGIN);
+        askForAuth();
+    }
+}
+
+
+2. REASONING
+
+1. Semantic sink (PREAUTH case)
+
+In the PREAUTH branch, the function transitions into an authenticated IMAP session and executes post-authentication commands:
+model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED);
+onComplete(); → sends IMAP commands (ID, ENABLE, etc.)
+This constitutes a semantic sink because it begins an authenticated protocol exchange over whatever network channel is currently in use.
+
+2. Conditions that must hold for this sink to be safe
+
+To avoid CWE-200 (leaking authenticated session data to unauthorized actors), three conditions must hold:
+C1. The channel must already be secure (TLS).
+Authenticated traffic should not be sent over plaintext.
+C2. PREAUTH must not bypass STARTTLS policy.
+If the client normally requires STARTTLS or the server supports it, PREAUTH should not suppress the upgrade.
+C3. PREAUTH must not be trusted on an unauthenticated connection.
+A MITM could forge * PREAUTH on plaintext, tricking the client into treating the attacker as an authenticated server.
+
+3. Local validation in the snippet
+
+In the given code:
+PREAUTH is processed while the state is still CONNECTED_PRETLS_PRECAPS (i.e., before TLS).
+The PREAUTH path does not trigger STARTTLS, does not check security policy, and does not verify channel encryption.
+It immediately transitions to AUTHENTICATED and sends follow-up commands.
+Therefore:
+C1 is violated → authenticated data can be sent over plaintext.
+C2 is bypassed → PREAUTH skips the normal STARTTLS/login flow.
+C3 is violated → a MITM can spoof PREAUTH and hijack the session.
+
+Finding:
+PREAUTH on a plaintext channel is accepted without any security validation, allowing a man-in-the-middle attacker to force the client into an authenticated state and observe all subsequent IMAP traffic.
+
+
+3. OUTPUT:
+
+{
+  "sinks": [
+    {
+      "sink_id": "case PREAUTH: model->changeConnectionState(parser, CONN_STATE_AUTHENTICATED); onComplete();",
+      "sink_description": "Transition to AUTHENTICATED state and execution of post-authentication IMAP commands after receiving PREAUTH, without verifying channel security.",
+      "required_conditions": [
+        {
+          "id": "secure_channel_before_auth",
+          "description": "The connection must already be protected by TLS before treating PREAUTH as authenticated and sending further IMAP commands.",
+          "locally_satisfied": false,
+          "justification": ""
+        },
+        {
+          "id": "preauth_must_not_bypass_starttls_policy",
+          "description": "PREAUTH must not cause the client to skip STARTTLS when STARTTLS is required or available.",
+          "locally_satisfied": false,
+          "justification": ""
+        },
+        {
+          "id": "preauth_must_not_be_trusted_on_plaintext",
+          "description": "PREAUTH must not be accepted as genuine authentication when received over a plaintext, unauthenticated connection.",
+          "locally_satisfied": false,
+          "justification": ""
+        }
+      ]
+    },
+    {
+      "sink_id": "askForAuth(): parser->login(model->m_imapUser, model->m_imapPassword);",
+      "sink_description": "Transmission of IMAP credentials (username and password) to the server via LOGIN command.",
+      "required_conditions": [
+        {
+          "id": "no_login_when_logindisabled",
+          "description": "LOGIN must not be sent if the server advertises LOGINDISABLED capability.",
+          "locally_satisfied": true,
+          "justification": "The code explicitly checks for LOGINDISABLED and aborts authentication if it remains present after STARTTLS, and asserts its absence before sending LOGIN."
+        },
+        {
+          "id": "clear_credentials_on_failure",
+          "description": "Credentials must be cleared from memory after a failed authentication attempt.",
+          "locally_satisfied": true,
+          "justification": "On login failure, m_imapPassword is cleared and m_hasImapPassword is set to false before retrying authentication."
+        },
+        {
+          "id": "no_credential_logging",
+          "description": "Credentials must not be logged or included in user-visible error messages.",
+          "locally_satisfied": true,
+          "justification": "Neither the username nor the password is ever concatenated into logs, alerts, or error messages in this function or its callees."
+        },
+        {
+          "id": "secure_channel_before_login",
+          "description": "Credentials should only be sent over a secure (TLS) channel.",
+          "locally_satisfied": false,
+          "justification": ""
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+################################CWE-200 EXAMPLE (CVE-2013_7299)#######################################
+
+1. INPUT:
+
+MAIN FUNCTION:
+  
+  bool Messageheader::Parser::state_fieldbody_crlf(char ch)
+  {
+    if (ch == '\r')
+      SET_STATE(state_end_cr);
+    else if (ch == '\n')
+    {
+      log_debug("header " << fieldnamePtr << ": " << fieldbodyPtr);
+      switch (header.onField(fieldnamePtr, fieldbodyPtr))
+      {
+        case OK:
+        case END:  return true;
+                   break;
+        case FAIL: failedFlag = true;
+                   log_warn("invalid character " << chartoprint(ch) << " in fieldbody");
+                   break;
+      }
+
+      return true;
+    }
+    else if (std::isspace(ch))
+    {
+      // continuation line
+      checkHeaderspace(1);
+      *(headerdataPtr - 1) = '\n';
+      *headerdataPtr++ = ch;
+      SET_STATE(state_fieldbody);
+    }
+    else if (ch >= 33 && ch <= 126)
+    {
+      switch (header.onField(fieldnamePtr, fieldbodyPtr))
+      {
+        case OK:   SET_STATE(state_fieldname);
+                   break;
+        case FAIL: failedFlag = true;
+                   log_warn("invalid character " << chartoprint(ch) << " in fieldbody");
+                   break;
+        case END:  return true;
+                   break;
+      }
+
+      fieldnamePtr = headerdataPtr;
+      checkHeaderspace(1);
+      *headerdataPtr++ = ch;
+    }
+    return false;
+  }
+
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE -------- 
+-------- Code of the functions used by the analyzed function --------
+
+Calle:checkHeaderspace
+void Messageheader::Parser::checkHeaderspace(unsigned chars) const
+{
+    if (headerdataPtr + chars >= header.rawdata + sizeof(header.rawdata))
+        throw HttpError(HTTP_REQUEST_ENTITY_TOO_LARGE, "header too large");
+}
+
+Calle:chartoprint
+std::string chartoprint(char ch)
+{
+    const static char hex[] = "0123456789abcdef";
+
+    if (std::isprint(ch))
+        return std::string(1, '\'') + ch + '\'';
+    else
+        return std::string("'\\x") + hex[ch >> 4] + hex[ch & 0xf] + '\'';
+}
+
+Calle:onField
+Partheader::return_type Partheader::onField(const char* name,
+                                            const char* value)
+{
+    if (tnt::StringCompareIgnoreCase<const char*>(name, "Content-Disposition:") == 0)
+    {
+        std::istringstream in(value);
+        in >> cd;
+
+        if (!in)
+            return FAIL;
+    }
+
+    return Messageheader::onField(name, value);
+}
+
+
+2. REASONING
+
+Semantic sink
+
+The semantic sink is the parser’s internal buffer and its pointer state at function exit.
+Other parts of the parser will later treat fieldnamePtr and fieldbodyPtr as valid, null-terminated C-strings.
+Therefore, any exit path (return or exception) that leaves the buffer in an inconsistent state is a sink.
+
+Conditions that must hold
+For the sink to be safe, these conditions must hold at every exit:
+
+C1: All header strings pointed to by fieldnamePtr / fieldbodyPtr must be null-terminated.
+C2: The buffer must represent a complete, coherent header field, or the pointers must be reset.
+C3: Failure paths (including exceptions) must not leave partially written or attacker-controlled data referenced by these pointers.
+
+Local validation
+
+In the code:
+Bytes are appended to the buffer (*headerdataPtr++ = ch;) but no null terminator is ever written.
+The function can return or throw (via checkHeaderspace) immediately after writes.
+Those exits occur before any termination or reset, leaving pointers referencing unterminated, partial header data.
+Downstream code later interprets these pointers as valid C-strings.
+Therefore, the required conditions are not satisfied, and the function leaves the parser in an unsafe semantic state even though raw memory bounds are enforced.
+
+
+3. OUTPUT
+
+{
+  "sinks": [
+    {
+      "sink_id": "exit_after_buffer_write(*headerdataPtr++ = ch)",
+      "sink_description": "Function may return or throw after modifying header.rawdata, leaving pointers referencing unterminated or incomplete header data that downstream code interprets as valid C-strings.",
+      "required_conditions": [
+        {
+          "id": "null_termination",
+          "description": "All strings referenced by fieldnamePtr/fieldbodyPtr must be null-terminated on every exit path.",
+          "locally_satisfied": false,
+          "justification": ""
+        },
+        {
+          "id": "coherent_header_state",
+          "description": "On exit, the buffer must represent a complete and coherent header field or must be explicitly invalidated/reset.",
+          "locally_satisfied": false,
+          "justification": ""
+        },
+        {
+          "id": "safe_failure_state",
+          "description": "Failure paths (including exceptions) must not leave partially written or attacker-controlled data referenced by header pointers.",
+          "locally_satisfied": false,
+          "justification": ""
+        },
+        {
+          "id": "bounds_check_on_write",
+          "description": "Every write into header.rawdata must be preceded by a bounds check to prevent raw buffer overflow.",
+          "locally_satisfied": true,
+          "justification": "Before each write to headerdataPtr, checkHeaderspace(1) is called, and it throws if the write would exceed header.rawdata bounds."
+        }
+      ]
+    },
+    {
+      "sink_id": "checkHeaderspace(headerdataPtr + chars)",
+      "sink_description": "Pre-write bounds enforcement preventing writes past the end of the header.rawdata buffer.",
+      "required_conditions": [
+        {
+          "id": "no_out_of_bounds_write",
+          "description": "Writes to the internal header buffer must not exceed its allocated size.",
+          "locally_satisfied": true,
+          "justification": "checkHeaderspace compares headerdataPtr + chars against header.rawdata + sizeof(header.rawdata) and throws before any out-of-bounds write occurs."
+        }
+      ]
+    },
+    {
+      "sink_id": "chartoprint(ch)",
+      "sink_description": "Conversion of a single character to a printable representation for logging.",
+      "required_conditions": [
+        {
+          "id": "controlled_output_size",
+          "description": "Logged output derived from input characters must be size-bounded and not include adjacent memory.",
+          "locally_satisfied": true,
+          "justification": "chartoprint returns a fixed-size string derived solely from the input character ch, without dereferencing surrounding memory."
+        }
+      ]
+    }
+  ]
+}
+
+
+
+
+
+
+#####################################CWE-862 EXAMPLES (CVE-2022-40673)#################################
+
+1. INPUT
+
+
+#include <signal.h>
+#include <PolkitQt1/Subject>
+#include <PolkitQt1/Authority>
+#include <QFile>
+#include <QtDBus>
+#include <QCoreApplication>
+#include "helper.h"
+
+Helper {
+    QVariantMap Helper::flushPageCache()
+    {
+        QVariantMap reply;
+        reply[QStringLiteral("success")] = true;
+
+        if (!isCallerAuthorized()) {
+            reply[QStringLiteral("success")] = false;
+            return reply;
+        }
+
+        QFile file("/proc/sys/vm/drop_caches");
+
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            file.write("1");
+            file.close();
+        }
+        else {
+            reply[QStringLiteral("success")] = false;
+            reply[QStringLiteral("error")] = file.errorString();
+        }
+
+        return reply;
+    }
+}
+
+-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------
+-------- Code of the functions used by the analyzed function --------
+
+Callee: isCallerAuthorized
+bool Helper::isCallerAuthorized()
+{
+    if (!calledFromDBus()) {
+        return false;
+    }
+
+    if (m_serviceWatcher->watchedServices().contains(message().service())) {
+        return true;
+    }
+
+    if (!m_serviceWatcher->watchedServices().isEmpty()) {
+        qDebug() << "There are already registered DBus connections.";
+        return false;
+    }
+
+    PolkitQt1::SystemBusNameSubject subject(message().service());
+    PolkitQt1::Authority *authority = PolkitQt1::Authority::instance();
+
+    PolkitQt1::Authority::Result result;
+    QEventLoop e;
+
+    connect(
+        authority,
+        &PolkitQt1::Authority::checkAuthorizationFinished,
+        &e,
+        [&e, &result](PolkitQt1::Authority::Result _result) {
+            result = _result;
+            e.quit();
+        }
+    );
+
+    authority->checkAuthorization(
+        QStringLiteral("dev.jonmagon.kdiskmark.helper.init"),
+        subject,
+        PolkitQt1::Authority::AllowUserInteraction
+    );
+
+    e.exec();
+
+    if (authority->hasError()) {
+        qDebug() << "Encountered error while checking authorization, error code: "
+                 << authority->lastError()
+                 << authority->errorDetails();
+        authority->clearError();
+    }
+
+    switch (result) {
+        case PolkitQt1::Authority::Yes:
+            m_serviceWatcher->addWatchedService(message().service());
+            return true;
+
+        default:
+            sendErrorReply(QDBusError::AccessDenied);
+
+            if (m_serviceWatcher->watchedServices().isEmpty())
+                qApp->quit();
+
+            return false;
+    }
+}
+
+
+
+2. REASONING
+
+
+1. Identify the semantic sink
+Scan the function for privileged operations.
+In this case, the sink is:
+
+file.write("1") → /proc/sys/vm/drop_caches
+
+This is a system-wide privileged action requiring authorization.
+
+2. Identify semantic outputs
+The function reports state via:
+
+reply["success"] (primary success indicator)
+reply["error"] (error message)
+
+Semantically, success == true should mean:
+authorization passed AND the privileged operation succeeded.
+
+3. Infer required conditions for truthful success
+- auth_required: caller must be authorized
+- auth_gates_sink: sink reachable only if authorized
+- success_flag_consistent: success must be set after verifying authorization + sink success
+Ideal invariant:
+success = true only after (auth OK) AND (sink OK).
+
+4. Trace actual control/semantic flow
+Execution order:
+- success = true (before knowing anything)
+- Authorization check (may flip to false)
+- Sink execution
+- Error branch (may flip to false)
+- Return final success
+So success is an optimistic default that persists unless an explicit failure branch resets it.
+
+5. Compare actual semantics to the ideal invariant
+- Ideal: success = true only after verified authorization + sink success
+- Actual: success is set before authorization and only changed in failure branches
+→ Meaning of success == true becomes “no explicit failure occurred,” not “authorization + sink succeeded.”
+
+6. Conclusion (semantic-flow bug)
+
+- Authorization does protect the sink
+- But the success flag is semantically incorrect
+Set too early
+Not tied to verified preconditions
+Prone to future inconsistencies
+This is a semantic-flow vulnerability: the function’s observable semantics do not reliably reflect authorization and privileged execution.
+
+
+3. OUTPUT
+
+
+{
+  "sinks": [
+    {
+      "sink_id": "file.write(\"1\")",
+      "sink_description": "Writes to /proc/sys/vm/drop_caches, a privileged kernel interface that triggers a system-wide page cache flush.",
+      "required_conditions": [
+        {
+          "id": "auth_required",
+          "description": "The caller must be authorized before the privileged write is executed.",
+          "locally_satisfied": true,
+          "justification": "The function checks isCallerAuthorized() and returns early if it fails, preventing the sink from executing."
+        },
+        {
+          "id": "auth_gates_sink",
+          "description": "Authorization must occur before reaching the sink.",
+          "locally_satisfied": true,
+          "justification": "The authorization check is placed immediately before any attempt to open or write to /proc/sys/vm/drop_caches."
+        },
+        {
+          "id": "success_flag_consistent",
+          "description": "The function must only report success after verifying authorization and completing the sink safely.",
+          "locally_satisfied": false,
+          "justification": ""
+        }
+      ]
+    }
+  ]
+}

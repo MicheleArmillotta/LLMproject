@@ -1,0 +1,68 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "ntlm_fetch_string",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2019-12529/repo/lib/ntlmauth/ntlmauth.cc",
+      "96-145"
+    ],
+    "function_name": "ntlm_fetch_string",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"util.h\"       /* for base64-related stuff */\n#include \"ntlmauth/ntlmauth.h\"\n#include <strings.h>\n#include <random>\n#include <cstring>\n#include \"squid.h\"\n\nlstring\nntlm_fetch_string(const ntlmhdr *packet, const int32_t packet_size, const strhdr * str, const uint32_t flags)\n{\n    static char buf[NTLM_MAX_FIELD_LENGTH];\n    lstring rv;\n    char *d;\n\n    rv.str = NULL;\n    rv.l = -1;\n\n    int16_t l = le16toh(str->len);\n    int32_t o = le32toh(str->offset);\n    // debug(\"ntlm_fetch_string(plength=%d,l=%d,o=%d)\\n\",packet_size,l,o);\n\n    if (l < 0 || l > NTLM_MAX_FIELD_LENGTH || o + l > packet_size || o == 0) {\n        debug(\"ntlm_fetch_string: insane data (pkt-sz: %d, fetch len: %d, offset: %d)\\n\", packet_size,l,o);\n        return rv;\n    }\n    rv.str = (char *)packet + o;\n    rv.l = 0;\n    if ((flags & NTLM_NEGOTIATE_ASCII) == 0) {\n        /* UNICODE string */\n        unsigned short *s = (unsigned short *)rv.str;\n        rv.str = d = buf;\n\n        for (uint32_t len = (l>>1); len; ++s, --len) {\n            uint16_t c = le16toh(*s);\n            if (c > 254 || c == '\\0') {\n                fprintf(stderr, \"ntlmssp: bad unicode: %04x\\n\", c);\n                return rv;\n            }\n            *d = static_cast<char>(c&0xFF);\n            ++d;\n            ++rv.l;\n        }\n    } else {\n        /* ASCII/OEM string */\n        char *sc = rv.str;\n\n        for (; l>=0; ++sc, --l) {\n            if (*sc == '\\0' || !xisprint(*sc)) {\n                fprintf(stderr, \"ntlmssp: bad ascii: %04x\\n\", *sc);\n                return rv;\n            }\n            ++rv.l;\n        }\n    }\n\n    return rv;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": [
+      {
+        "sink_id": "fprintf(stderr, \"ntlmssp: bad unicode: %04x\\n\", c);",
+        "sink_description": "Logs details about invalid Unicode characters encountered while parsing an NTLM packet to stderr, which may be observable by unauthorized actors depending on deployment.",
+        "required_conditions": [
+          {
+            "id": "stderr_not_exposed_to_untrusted",
+            "description": "The stderr output must not be exposed to untrusted or unauthorized users (e.g., restricted to local admin or debug logs).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "no_sensitive_ntlm_contents_in_logs",
+            "description": "Logged data must not contain sensitive NTLM credential material or allow reconstruction of secrets.",
+            "locally_satisfied": true,
+            "justification": "Only the 16-bit code unit value of the offending character is logged in hex without any surrounding context from the NTLM packet, so no broader credential material is directly included."
+          }
+        ]
+      },
+      {
+        "sink_id": "fprintf(stderr, \"ntlmssp: bad ascii: %04x\\n\", *sc);",
+        "sink_description": "Logs details about invalid ASCII characters encountered while parsing an NTLM packet to stderr, which may be observable by unauthorized actors depending on deployment.",
+        "required_conditions": [
+          {
+            "id": "stderr_not_exposed_to_untrusted",
+            "description": "The stderr output must not be exposed to untrusted or unauthorized users (e.g., restricted to local admin or debug logs).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "no_sensitive_ntlm_contents_in_logs",
+            "description": "Logged data must not contain sensitive NTLM credential material or allow reconstruction of secrets.",
+            "locally_satisfied": true,
+            "justification": "Only the offending byte value is logged in hex, without logging the overall NTLM message, username, or other fields, so the direct content of NTLM credentials is not exposed."
+          }
+        ]
+      },
+      {
+        "sink_id": "returning lstring rv pointing into packet or into static buf",
+        "sink_description": "Returns a structure containing a pointer to a substring of the NTLM packet (or to a static buffer) to the caller, potentially exposing parsed NTLM field contents such as usernames or domain names.",
+        "required_conditions": [
+          {
+            "id": "caller_authorized_for_ntlm_fields",
+            "description": "The caller must be authorized to access the specific NTLM field contents referenced by the returned pointer (e.g., usernames, domains, workstation names).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "no_external_exposure_without_filtering",
+            "description": "The caller must ensure that the returned string is not directly forwarded to logs, error messages, or network peers without appropriate sanitization and authorization checks.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

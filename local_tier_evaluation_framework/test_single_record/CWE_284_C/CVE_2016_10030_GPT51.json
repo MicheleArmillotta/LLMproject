@@ -1,0 +1,50 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "_prolog_error",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2016-10030/repo/src/slurmd/slurmd/req.c",
+      "1386-1434"
+    ],
+    "function_name": "_prolog_error",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"src/slurmd/common/task_plugin.h\"\n#include \"src/slurmd/common/slurmstepd_init.h\"\n#include \"src/slurmd/common/reverse_tree_math.h\"\n#include \"src/slurmd/common/run_script.h\"\n#include \"src/slurmd/common/proctrack.h\"\n#include \"src/slurmd/common/job_container_plugin.h\"\n#include \"src/slurmd/slurmd/slurmd.h\"\n#include \"src/slurmd/slurmd/get_mach_stat.h\"\n#include \"src/bcast/file_bcast.h\"\n#include \"src/common/xmalloc.h\"\n#include \"src/common/xstring.h\"\n#include \"src/common/util-net.h\"\n#include \"src/common/uid.h\"\n#include \"src/common/stepd_api.h\"\n#include \"src/common/slurm_strcasestr.h\"\n#include \"src/common/slurm_protocol_interface.h\"\n#include \"src/common/slurm_protocol_api.h\"\n#include \"src/common/slurm_protocol_defs.h\"\n#include \"src/common/slurm_jobacct_gather.h\"\n#include \"src/common/slurm_acct_gather_energy.h\"\n#include \"src/common/slurm_cred.h\"\n#include \"src/common/slurm_auth.h\"\n#include \"src/common/siphash.h\"\n#include \"src/common/read_config.h\"\n#include \"src/common/plugstack.h\"\n#include \"src/common/node_select.h\"\n#include \"src/common/node_features.h\"\n#include \"src/common/msg_aggr.h\"\n#include \"src/common/macros.h\"\n#include \"src/common/log.h\"\n#include \"src/common/list.h\"\n#include \"src/common/hostlist.h\"\n#include \"src/common/gres.h\"\n#include \"src/common/forward.h\"\n#include \"src/common/fd.h\"\n#include \"src/common/env.h\"\n#include \"src/common/cpu_frequency.h\"\n#include \"src/common/callerid.h\"\n#include <utime.h>\n#include <unistd.h>\n#include <sys/wait.h>\n#include <sys/un.h>\n#include <sys/types.h>\n#include <sys/stat.h>\n#include <poll.h>\n#include <sys/param.h>\n#include <time.h>\n#include <string.h>\n#include <stdlib.h>\n#include <signal.h>\n#include <sched.h>\n#include <pthread.h>\n#include <grp.h>\n#include <fcntl.h>\n#  include \"config.h\"\n\nstatic bool _is_batch_job_finished(uint32_t job_id);\nstatic bool _job_still_running(uint32_t job_id);\nstatic void _launch_complete_add(uint32_t job_id);\nstatic void _launch_complete_log(char *type, uint32_t job_id);\nstatic void _launch_complete_rm(uint32_t job_id);\nstatic void _launch_complete_wait(uint32_t job_id);\nstatic bool _launch_job_test(uint32_t job_id);\nstatic void _note_batch_job_finished(uint32_t job_id);\nstatic bool _slurm_authorized_user(uid_t uid);\nstatic void _sync_messages_kill(kill_job_msg_t *req);\nstatic int  _valid_sbcast_cred(file_bcast_msg_t *req, uid_t req_uid,\n\t\t\t       uint16_t block_no, uint32_t *job_id);\nstatic gids_t *_gids_cache_lookup(char *user, gid_t gid);\nstatic int  _add_starting_step(uint16_t type, void *req);\nstatic int  _remove_starting_step(uint16_t type, void *req);\nstatic void _add_job_running_prolog(uint32_t job_id);\nstatic void _remove_job_running_prolog(uint32_t job_id);\nstatic void _wait_for_job_running_prolog(uint32_t job_id);\n\nstatic void\n_prolog_error(batch_job_launch_msg_t *req, int rc)\n{\n\tchar *err_name_ptr, err_name[256], path_name[MAXPATHLEN];\n\tchar *fmt_char;\n\tint fd;\n\n\tif (req->std_err || req->std_out) {\n\t\tif (req->std_err)\n\t\t\tstrncpy(err_name, req->std_err, sizeof(err_name));\n\t\telse\n\t\t\tstrncpy(err_name, req->std_out, sizeof(err_name));\n\t\tif ((fmt_char = strchr(err_name, (int) '%')) &&\n\t\t    (fmt_char[1] == 'j') && !strchr(fmt_char+1, (int) '%')) {\n\t\t\tchar tmp_name[256];\n\t\t\tfmt_char[1] = 'u';\n\t\t\tsnprintf(tmp_name, sizeof(tmp_name), err_name,\n\t\t\t\t req->job_id);\n\t\t\tstrncpy(err_name, tmp_name, sizeof(err_name));\n\t\t}\n\t} else {\n\t\tsnprintf(err_name, sizeof(err_name), \"slurm-%u.out\",\n\t\t\t req->job_id);\n\t}\n\terr_name_ptr = err_name;\n\tif (err_name_ptr[0] == '/')\n\t\tsnprintf(path_name, MAXPATHLEN, \"%s\", err_name_ptr);\n\telse if (req->work_dir)\n\t\tsnprintf(path_name, MAXPATHLEN, \"%s/%s\",\n\t\t\treq->work_dir, err_name_ptr);\n\telse\n\t\tsnprintf(path_name, MAXPATHLEN, \"/%s\", err_name_ptr);\n\n\tif ((fd = open(path_name, (O_CREAT|O_APPEND|O_WRONLY), 0644)) == -1) {\n\t\terror(\"Unable to open %s: %s\", path_name,\n\t\t      slurm_strerror(errno));\n\t\treturn;\n\t}\n\tsnprintf(err_name, sizeof(err_name),\n\t\t \"Error running slurm prolog: %d\\n\", WEXITSTATUS(rc));\n\tsafe_write(fd, err_name, strlen(err_name));\n\tif (fchown(fd, (uid_t) req->uid, (gid_t) req->gid) == -1) {\n\t\tsnprintf(err_name, sizeof(err_name),\n\t\t\t \"Couldn't change fd owner to %u:%u: %m\\n\",\n\t\t\t req->uid, req->gid);\n\t}\nrwfail:\n\tclose(fd);\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: close\nstatic void _file_bcast_close_file(file_bcast_info_t *key)\n{\n\t_fb_wrlock();\n\tlist_delete_all(file_bcast_list, _bcast_find_in_list, key);\n\t_fb_wrunlock();\n}\n",
+    "sinks": [
+      {
+        "sink_id": "open(path_name, (O_CREAT|O_APPEND|O_WRONLY), 0644)",
+        "sink_description": "Creates or appends to a file for writing an error message about the slurm prolog, potentially in a user-specified working directory or path, and thus controlling filesystem modification under the slurmd context.",
+        "required_conditions": [
+          {
+            "id": "path_must_be_authorized_for_creation_or_write",
+            "description": "The effective user under which this function runs must be authorized to create or append to the resolved error file path (path_name) for the specific job/user, and the path must not allow escalation (e.g., arbitrary system file overwrite).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "path_must_not_be_untrusted_global_location",
+            "description": "If req->std_err, req->std_out, or req->work_dir are derived from user input, the resulting path_name must be restricted so that it does not point to sensitive system files or other users' files.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "fchown(fd, (uid_t) req->uid, (gid_t) req->gid)",
+        "sink_description": "Changes the ownership of the created error file to the job's uid/gid, transferring control of this file to that user.",
+        "required_conditions": [
+          {
+            "id": "chown_target_must_be_correct_job_user",
+            "description": "The uid and gid passed to fchown must correspond to the intended job owner and not be attacker-controlled to gain ownership of files outside their authorization domain.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "chown_must_only_apply_to_safe_paths",
+            "description": "The file descriptor fd must refer only to files that it is safe to hand over to the job user (e.g., not privileged system files or shared configuration files).",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

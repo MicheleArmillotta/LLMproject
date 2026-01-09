@@ -1,0 +1,128 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "cs_cmd_flags",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2014-9773/repo/modules/chanserv/flags.c",
+      "154-488"
+    ],
+    "function_name": "cs_cmd_flags",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"template.h\"\n#include \"atheme.h\"\n\nstatic void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[]);\n\nstatic void cs_cmd_flags(sourceinfo_t *si, int parc, char *parv[])\n{\n\tchanacs_t *ca;\n\tmowgli_node_t *n;\n\tchar *channel = parv[0];\n\tchar *target = sstrdup(parv[1]);\n\tchar *flagstr = parv[2];\n\tconst char *str1;\n\tunsigned int addflags, removeflags, restrictflags;\n\thook_channel_acl_req_t req;\n\tmychan_t *mc;\n\n\tif (parc < 1)\n\t{\n\t\tcommand_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, \"FLAGS\");\n\t\tcommand_fail(si, fault_needmoreparams, _(\"Syntax: FLAGS <channel> [target] [flags]\"));\n\t\treturn;\n\t}\n\n\tmc = mychan_find(channel);\n\tif (!mc)\n\t{\n\t\tcommand_fail(si, fault_nosuch_target, _(\"Channel \\2%s\\2 is not registered.\"), channel);\n\t\treturn;\n\t}\n\n\tif (metadata_find(mc, \"private:close:closer\") && (target || !has_priv(si, PRIV_CHAN_AUSPEX)))\n\t{\n\t\tcommand_fail(si, fault_noprivs, _(\"\\2%s\\2 is closed.\"), channel);\n\t\treturn;\n\t}\n\n\tif (!target || (target && target[0] == '+' && flagstr == NULL))\n\t{\n\t\tunsigned int flags = (target != NULL) ? flags_to_bitmask(target, 0) : 0;\n\n\t\tdo_list(si, mc, flags);\n\t\treturn;\n\t}\n\n\t/*\n\t * following conditions are for compatibility with Anope just to avoid a whole clusterfuck\n\t * of confused users caused by their 'innovation.'  yeah, that's a word for it alright.\n\t *\n\t * anope 1.9's shiny new FLAGS command has:\n\t *\n\t * FLAGS #channel LIST\n\t * FLAGS #channel MODIFY user flagspec\n\t * FLAGS #channel CLEAR\n\t *\n\t * obviously they do not support the atheme syntax, because lets face it, they like to\n\t * 'innovate.'  this is, of course, hilarious for obvious reasons.  never mind that we\n\t * *invented* the FLAGS system for channel ACLs, so you would think they would find it\n\t * worthwhile to be compatible here.  i guess that would have been too obvious or something\n\t * about their whole 'stealing our design' thing that they have been doing in 1.9 since the\n\t * beginning...  or do i mean 'innovating?'\n\t *\n\t * anyway we rewrite the commands as appropriate in the two if blocks below so that they\n\t * are processed by the flags code as the user would intend.  obviously, we're not really\n\t * capable of handling the anope flag model (which makes honestly zero sense to me, and is\n\t * extremely complex which kind of misses the entire point of the flags UI design...) so if\n\t * some user tries passing anope flags, it will probably be hilarious.  the good news is\n\t * most of the anope flags tie up to atheme flags in some weird way anyway (probably because,\n\t * i don't know, they copied the entire design and then fucked it up?  yeah.  probably that.)\n\t *\n\t *   --nenolod\n\t */\n\telse if (!strcasecmp(target, \"LIST\") && myentity_find_ext(target) == NULL)\n\t{\n\t\tdo_list(si, mc, 0);\n\t\tfree(target);\n\n\t\treturn;\n\t}\n\telse if (!strcasecmp(target, \"CLEAR\") && myentity_find_ext(target) == NULL)\n\t{\n\t\tfree(target);\n\n\t\tif (!chanacs_source_has_flag(mc, si, CA_FOUNDER))\n\t\t{\n\t\t\tcommand_fail(si, fault_noprivs, \"You are not authorized to perform this operation.\");\n\t\t\treturn;\n\t\t}\n\n\t\tmowgli_node_t *tn;\n\n\t\tMOWGLI_ITER_FOREACH_SAFE(n, tn, mc->chanacs.head)\n\t\t{\n\t\t\tca = n->data;\n\n\t\t\tif (ca->level & CA_FOUNDER)\n\t\t\t\tcontinue;\n\n\t\t\tobject_unref(ca);\n\t\t}\n\n\t\tlogcommand(si, CMDLOG_DO, \"CLEAR:FLAGS: \\2%s\\2\", mc->name);\n\t\tcommand_success_nodata(si, _(\"Cleared flags in \\2%s\\2.\"), mc->name);\n\t\treturn;\n\t}\n\telse if (!strcasecmp(target, \"MODIFY\") && myentity_find_ext(target) == NULL)\n\t{\n\t\tfree(target);\n\n\t\tif (parc < 3)\n\t\t{\n\t\t\tcommand_fail(si, fault_needmoreparams, STR_INSUFFICIENT_PARAMS, \"FLAGS\");\n\t\t\tcommand_fail(si, fault_needmoreparams, _(\"Syntax: FLAGS <#channel> MODIFY [target] <flags>\"));\n\t\t\treturn;\n\t\t}\n\n\t\tflagstr = strchr(parv[2], ' ');\n\t\tif (flagstr)\n\t\t\t*flagstr++ = '\\0';\n\n\t\ttarget = strdup(parv[2]);\n\t}\n\n\t{\n\t\tmyentity_t *mt;\n\n\t\tif (!si->smu)\n\t\t{\n\t\t\tcommand_fail(si, fault_noprivs, _(\"You are not logged in.\"));\n\t\t\treturn;\n\t\t}\n\n\t\tif (!flagstr)\n\t\t{\n\t\t\tif (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_noprivs, _(\"You are not authorized to execute this command.\"));\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tif (validhostmask(target))\n\t\t\t\tca = chanacs_find_host_literal(mc, target, 0);\n\t\t\telse\n\t\t\t{\n\t\t\t\tif (!(mt = myentity_find_ext(target)))\n\t\t\t\t{\n\t\t\t\t\tcommand_fail(si, fault_nosuch_target, _(\"\\2%s\\2 is not registered.\"), target);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tfree(target);\n\t\t\t\ttarget = sstrdup(mt->name);\n\t\t\t\tca = chanacs_find_literal(mc, mt, 0);\n\t\t\t}\n\t\t\tif (ca != NULL)\n\t\t\t{\n\t\t\t\tstr1 = bitmask_to_flags2(ca->level, 0);\n\t\t\t\tcommand_success_string(si, str1, _(\"Flags for \\2%s\\2 in \\2%s\\2 are \\2%s\\2.\"),\n\t\t\t\t\t\ttarget, channel,\n\t\t\t\t\t\tstr1);\n\t\t\t}\n\t\t\telse\n\t\t\t\tcommand_success_string(si, \"\", _(\"No flags for \\2%s\\2 in \\2%s\\2.\"),\n\t\t\t\t\t\ttarget, channel);\n\t\t\tlogcommand(si, CMDLOG_GET, \"FLAGS: \\2%s\\2 on \\2%s\\2\", mc->name, target);\n\t\t\treturn;\n\t\t}\n\n\t\t/* founder may always set flags -- jilles */\n\t\trestrictflags = chanacs_source_flags(mc, si);\n\t\tif (restrictflags & CA_FOUNDER)\n\t\t\trestrictflags = ca_all;\n\t\telse\n\t\t{\n\t\t\tif (!(restrictflags & CA_FLAGS))\n\t\t\t{\n\t\t\t\t/* allow a user to remove their own access\n\t\t\t\t * even without +f */\n\t\t\t\tif (restrictflags & CA_AKICK ||\n\t\t\t\t\t\tsi->smu == NULL ||\n\t\t\t\t\t\tirccasecmp(target, entity(si->smu)->name) ||\n\t\t\t\t\t\tstrcmp(flagstr, \"-*\"))\n\t\t\t\t{\n\t\t\t\t\tcommand_fail(si, fault_noprivs, _(\"You are not authorized to execute this command.\"));\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t}\n\t\t\tif (irccasecmp(target, entity(si->smu)->name))\n\t\t\t\trestrictflags = allow_flags(mc, restrictflags);\n\t\t\telse\n\t\t\t\trestrictflags |= allow_flags(mc, restrictflags);\n\t\t}\n\n\t\tif (*flagstr == '+' || *flagstr == '-' || *flagstr == '=')\n\t\t{\n\t\t\tflags_make_bitmasks(flagstr, &addflags, &removeflags);\n\t\t\tif (addflags == 0 && removeflags == 0)\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_badparams, _(\"No valid flags given, use /%s%s HELP FLAGS for a list\"), ircd->uses_rcommand ? \"\" : \"msg \", chansvs.me->disp);\n\t\t\t\treturn;\n\t\t\t}\n\t\t}\n\t\telse\n\t\t{\n\t\t\taddflags = get_template_flags(mc, flagstr);\n\t\t\tif (addflags == 0)\n\t\t\t{\n\t\t\t\t/* Hack -- jilles */\n\t\t\t\tif (*target == '+' || *target == '-' || *target == '=')\n\t\t\t\t\tcommand_fail(si, fault_badparams, _(\"Usage: FLAGS %s [target] [flags]\"), mc->name);\n\t\t\t\telse\n\t\t\t\t\tcommand_fail(si, fault_badparams, _(\"Invalid template name given, use /%s%s TEMPLATE %s for a list\"), ircd->uses_rcommand ? \"\" : \"msg \", chansvs.me->disp, mc->name);\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tremoveflags = ca_all & ~addflags;\n\t\t}\n\n\t\tif (!validhostmask(target))\n\t\t{\n\t\t\tif (!(mt = myentity_find_ext(target)))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_nosuch_target, _(\"\\2%s\\2 is not registered.\"), target);\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tfree(target);\n\t\t\ttarget = sstrdup(mt->name);\n\n\t\t\tca = chanacs_open(mc, mt, NULL, true, entity(si->smu));\n\n\t\t\tif (ca->level & CA_FOUNDER && removeflags & CA_FLAGS && !(removeflags & CA_FOUNDER))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_noprivs, _(\"You may not remove a founder's +f access.\"));\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tif (ca->level & CA_FOUNDER && removeflags & CA_FOUNDER && mychan_num_founders(mc) == 1)\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_noprivs, _(\"You may not remove the last founder.\"));\n\t\t\t\treturn;\n\t\t\t}\n\t\t\tif (!(ca->level & CA_FOUNDER) && addflags & CA_FOUNDER)\n\t\t\t{\n\t\t\t\tif (mychan_num_founders(mc) >= chansvs.maxfounders)\n\t\t\t\t{\n\t\t\t\t\tcommand_fail(si, fault_noprivs, _(\"Only %d founders allowed per channel.\"), chansvs.maxfounders);\n\t\t\t\t\tchanacs_close(ca);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!myentity_can_register_channel(mt))\n\t\t\t\t{\n\t\t\t\t\tcommand_fail(si, fault_toomany, _(\"\\2%s\\2 has too many channels registered.\"), mt->name);\n\t\t\t\t\tchanacs_close(ca);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tif (!myentity_allow_foundership(mt))\n\t\t\t\t{\n\t\t\t\t\tcommand_fail(si, fault_toomany, _(\"\\2%s\\2 cannot take foundership of a channel.\"), mt->name);\n\t\t\t\t\tchanacs_close(ca);\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t}\n\t\t\tif (addflags & CA_FOUNDER)\n\t\t\t\taddflags |= CA_FLAGS, removeflags &= ~CA_FLAGS;\n\n\t\t\t/* If NEVEROP is set, don't allow adding new entries\n\t\t\t * except sole +b. Adding flags if the current level\n\t\t\t * is +b counts as adding an entry.\n\t\t\t * -- jilles */\n\t\t\t/* XXX: not all entities are users */\n\t\t\tif (isuser(mt) && (MU_NEVEROP & user(mt)->flags && addflags != CA_AKICK && addflags != 0 && (ca->level == 0 || ca->level == CA_AKICK)))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_noprivs, _(\"\\2%s\\2 does not wish to be added to channel access lists (NEVEROP set).\"), mt->name);\n\t\t\t\tchanacs_close(ca);\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tif (ca->level == 0 && chanacs_is_table_full(ca))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_toomany, _(\"Channel %s access list is full.\"), mc->name);\n\t\t\t\tchanacs_close(ca);\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\treq.ca = ca;\n\t\t\treq.oldlevel = ca->level;\n\n\t\t\tif (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_noprivs, _(\"You are not allowed to set \\2%s\\2 on \\2%s\\2 in \\2%s\\2.\"), bitmask_to_flags2(addflags, removeflags), mt->name, mc->name);\n\t\t\t\tchanacs_close(ca);\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\treq.newlevel = ca->level;\n\n\t\t\thook_call_channel_acl_change(&req);\n\t\t\tchanacs_close(ca);\n\t\t}\n\t\telse\n\t\t{\n\t\t\tif (addflags & CA_FOUNDER)\n\t\t\t{\n\t\t                command_fail(si, fault_badparams, _(\"You may not set founder status on a hostmask.\"));\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tca = chanacs_open(mc, NULL, target, true, entity(si->smu));\n\t\t\tif (ca->level == 0 && chanacs_is_table_full(ca))\n\t\t\t{\n\t\t\t\tcommand_fail(si, fault_toomany, _(\"Channel %s access list is full.\"), mc->name);\n\t\t\t\tchanacs_close(ca);\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\treq.ca = ca;\n\t\t\treq.oldlevel = ca->level;\n\n\t\t\tif (!chanacs_modify(ca, &addflags, &removeflags, restrictflags))\n\t\t\t{\n\t\t                command_fail(si, fault_noprivs, _(\"You are not allowed to set \\2%s\\2 on \\2%s\\2 in \\2%s\\2.\"), bitmask_to_flags2(addflags, removeflags), target, mc->name);\n\t\t\t\tchanacs_close(ca);\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\treq.newlevel = ca->level;\n\n\t\t\thook_call_channel_acl_change(&req);\n\t\t\tchanacs_close(ca);\n\t\t}\n\n\t\tif ((addflags | removeflags) == 0)\n\t\t{\n\t\t\tcommand_fail(si, fault_nochange, _(\"Channel access to \\2%s\\2 for \\2%s\\2 unchanged.\"), channel, target);\n\t\t\treturn;\n\t\t}\n\t\tflagstr = bitmask_to_flags2(addflags, removeflags);\n\t\tcommand_success_nodata(si, _(\"Flags \\2%s\\2 were set on \\2%s\\2 in \\2%s\\2.\"), flagstr, target, channel);\n\t\tlogcommand(si, CMDLOG_SET, \"FLAGS: \\2%s\\2 \\2%s\\2 \\2%s\\2\", mc->name, target, flagstr);\n\t\tverbose(mc, \"\\2%s\\2 set flags \\2%s\\2 on \\2%s\\2\", get_source_name(si), flagstr, target);\n\t}\n\n\tfree(target);\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: free\nstatic void free_template_list(mowgli_list_t *l)\n{\n\tmowgli_node_t *n, *tn;\n\n\treturn_if_fail(l != NULL);\n\n\tMOWGLI_ITER_FOREACH_SAFE(n, tn, l->head)\n\t{\n\t\ttemplate_t *t = n->data;\n\n\t\tmowgli_node_delete(&t->node, l);\n\t\tfree(t);\n\t}\n}\n\nCallee: _\nvoid _moddeinit(module_unload_intent_t intent)\n{\n\tservice_named_unbind_command(\"chanserv\", &cs_flags);\n}\n\nCallee: user\nstatic void sync_myuser(myuser_t *mu)\n{\n\tmowgli_node_t *iter;\n\n\treturn_if_fail(mu != NULL);\n\n\tMOWGLI_ITER_FOREACH(iter, mu->logins.head)\n\t{\n\t\tsync_user(iter->data);\n\t}\n}\n\nCallee: do_list\nstatic void do_list(sourceinfo_t *si, mychan_t *mc, unsigned int flags)\n{\n\tchanacs_t *ca;\n\tmowgli_node_t *n;\n\tbool operoverride = false;\n\tunsigned int i = 1;\n\n\tif (!(mc->flags & MC_PUBACL) && !chanacs_source_has_flag(mc, si, CA_ACLVIEW))\n\t{\n\t\tif (has_priv(si, PRIV_CHAN_AUSPEX))\n\t\t\toperoverride = true;\n\t\telse\n\t\t{\n\t\t\tcommand_fail(si, fault_noprivs, _(\"You are not authorized to perform this operation.\"));\n\t\t\treturn;\n\t\t}\n\t}\n\n\tcommand_success_nodata(si, _(\"Entry Nickname/Host          Flags\"));\n\tcommand_success_nodata(si, \"----- ---------------------- -----\");\n\n\tMOWGLI_ITER_FOREACH(n, mc->chanacs.head)\n\t{\n\t\tconst char *template, *mod_ago;\n\t\tstruct tm tm;\n\t\tchar mod_date[64];\n\n\t\tca = n->data;\n\n\t\tif (flags && !(ca->level & flags))\n\t\t\tcontinue;\n\n\t\ttemplate = get_template_name(mc, ca->level);\n\t\tmod_ago = ca->tmodified ? time_ago(ca->tmodified) : \"?\";\n\n\t\ttm = *localtime(&ca->tmodified);\n\t\tstrftime(mod_date, sizeof mod_date, TIME_FORMAT, &tm);\n\n\t\tif (template != NULL)\n\t\t\tcommand_success_nodata(si, _(\"%-5d %-22s %-20s (%s) (%s) [modified %s ago, on %s]\"),\n\t\t\t\ti, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), template, mc->name, mod_ago, mod_date);\n\t\telse\n\t\t\tcommand_success_nodata(si, _(\"%-5d %-22s %-20s (%s) [modified %s ago, on %s]\"),\n\t\t\t\ti, ca->entity ? ca->entity->name : ca->host, bitmask_to_flags(ca->level), mc->name, mod_ago, mod_date);\n\t\ti++;\n\t}\n\n\tcommand_success_nodata(si, \"----- ---------------------- -----\");\n\tcommand_success_nodata(si, _(\"End of \\2%s\\2 FLAGS listing.\"), mc->name);\n\n\tif (operoverride)\n\t\tlogcommand(si, CMDLOG_ADMIN, \"FLAGS: \\2%s\\2 (oper override)\", mc->name);\n\telse\n\t\tlogcommand(si, CMDLOG_GET, \"FLAGS: \\2%s\\2\", mc->name);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "do_list(si, mc, ...)",
+        "sink_description": "Lists channel access control entries (ACL flags) for the specified channel and optional filter, revealing ACL structure and potentially sensitive policy details.",
+        "required_conditions": [
+          {
+            "id": "list_acl_requires_view_or_pubacl",
+            "description": "The caller must either have ACL view privileges on the channel or the channel must have public ACLs, or the caller must have channel auspex privilege for an override.",
+            "locally_satisfied": true,
+            "justification": "Before calling do_list directly, the function allows listing only when (!target || target[0] == '+') and either mc->flags has MC_PUBACL or chanacs_source_has_flag(mc, si, CA_ACLVIEW) or has_priv(si, PRIV_CHAN_AUSPEX) in do_list(). Additionally, in the main function path where flagstr is NULL, it enforces (!MC_PUBACL && !CA_ACLVIEW) as a denial condition before calling do_list."
+          }
+        ]
+      },
+      {
+        "sink_id": "CLEAR branch: loop deleting chanacs entries",
+        "sink_description": "Clears non-founder access entries from the channel ACL, effectively resetting channel permissions for all non-founder entities/hosts.",
+        "required_conditions": [
+          {
+            "id": "clear_requires_founder",
+            "description": "Only a channel founder may clear non-founder flags from the channel access list.",
+            "locally_satisfied": true,
+            "justification": "In the CLEAR branch, before iterating and unref-ing chanacs entries, the function checks !chanacs_source_has_flag(mc, si, CA_FOUNDER) and denies with fault_noprivs if the caller is not a founder."
+          }
+        ]
+      },
+      {
+        "sink_id": "FLAGS modification via chanacs_modify(...)",
+        "sink_description": "Modifies the ACL flags for a given entity or hostmask on a channel, granting or revoking privileges including founder and management rights.",
+        "required_conditions": [
+          {
+            "id": "auth_required_logged_in",
+            "description": "The caller must be an authenticated (logged-in) user to view or modify flags for a specific target.",
+            "locally_satisfied": true,
+            "justification": "The function checks if (!si->smu) and rejects with 'You are not logged in.' before any per-target ACL view or modification logic executes."
+          },
+          {
+            "id": "view_requires_aclview_or_pubacl",
+            "description": "If only viewing flags for a target (no flagstr), the caller must have ACL view rights on the channel or the channel must have a public ACL.",
+            "locally_satisfied": true,
+            "justification": "When flagstr is NULL, the function enforces that if !(mc->flags & MC_PUBACL) and !chanacs_source_has_flag(mc, si, CA_ACLVIEW), the command is rejected with fault_noprivs before showing any flags."
+          },
+          {
+            "id": "modifier_needs_ca_flags_or_self_remove",
+            "description": "To modify flags, the caller must generally have the CA_FLAGS capability on the channel; an exception allows a user to remove their own access entirely with \"-*\" even without CA_FLAGS, provided they otherwise have some access (e.g., AKICK).",
+            "locally_satisfied": true,
+            "justification": "After computing restrictflags = chanacs_source_flags(mc, si), the function checks !(restrictflags & CA_FLAGS) and only allows a no-CA_FLAGS caller to proceed if they are modifying their own entry (target matches entity(si->smu)->name), flagstr equals \"-*\", si->smu is non-NULL, and they have some access like CA_AKICK; otherwise it returns a not-authorized error."
+          },
+          {
+            "id": "founder_can_set_all_flags",
+            "description": "If the caller has founder rights on the channel, they may set any flags on other entries.",
+            "locally_satisfied": true,
+            "justification": "The code tests if (restrictflags & CA_FOUNDER) and, if true, sets restrictflags = ca_all, effectively granting full ACL modification capability to founders."
+          },
+          {
+            "id": "non_self_target_limited_by_allow_flags",
+            "description": "When modifying flags for a target other than oneself, the caller's effective permissions are constrained by allow_flags(mc, restrictflags).",
+            "locally_satisfied": true,
+            "justification": "If irccasecmp(target, entity(si->smu)->name) is non-zero (target is not self), the function assigns restrictflags = allow_flags(mc, restrictflags), limiting what may be changed."
+          },
+          {
+            "id": "self_target_may_also_gain_allowable_flags",
+            "description": "When modifying one's own flags, the caller can both use existing rights and additionally any flags allowed by allow_flags for their current restrictflags.",
+            "locally_satisfied": true,
+            "justification": "If the target equals the caller's entity name, the code does restrictflags |= allow_flags(mc, restrictflags), expanding permissible modifications within allowed flags."
+          },
+          {
+            "id": "cannot_remove_founder_f_without_F",
+            "description": "A user may not remove another founder's +f (CA_FLAGS) access without also removing founder status, preventing partial demotion of founders.\n",
+            "locally_satisfied": true,
+            "justification": "After chanacs_open for an entity target, the function checks if (ca->level & CA_FOUNDER && removeflags & CA_FLAGS && !(removeflags & CA_FOUNDER)) and rejects with fault_noprivs if this condition holds."
+          },
+          {
+            "id": "cannot_remove_last_founder",
+            "description": "The last remaining founder of a channel may not be removed via flag changes.",
+            "locally_satisfied": true,
+            "justification": "The code checks if (ca->level & CA_FOUNDER && removeflags & CA_FOUNDER && mychan_num_founders(mc) == 1) and denies the operation, ensuring at least one founder remains."
+          },
+          {
+            "id": "founder_addition_constraints",
+            "description": "Granting founder status to an entity must respect limits on the number of founders, per-entity channel limits, and whether the entity is permitted to hold founder status.",
+            "locally_satisfied": true,
+            "justification": "When !(ca->level & CA_FOUNDER) and addflags & CA_FOUNDER, the function enforces several checks: mychan_num_founders(mc) < chansvs.maxfounders, myentity_can_register_channel(mt), and myentity_allow_foundership(mt); failures cause denial before modification."
+          },
+          {
+            "id": "neverop_respected",
+            "description": "If an entity has NEVEROP set, they must not be added to channel ACLs except possibly as a pure AKICK entry; granting broader access to NEVEROP users is forbidden.",
+            "locally_satisfied": true,
+            "justification": "For user entities, the code checks MU_NEVEROP and denies if addflags is not CA_AKICK/0 and current level is 0 or CA_AKICK, preventing addition of regular access flags for NEVEROP users."
+          },
+          {
+            "id": "acl_table_not_overfull",
+            "description": "A new or expanded ACL entry must not exceed the per-channel ACL table capacity.",
+            "locally_satisfied": true,
+            "justification": "Before modification, if ca->level == 0 and chanacs_is_table_full(ca) is true, the function rejects the operation with a 'list is full' error for both entity and hostmask branches."
+          },
+          {
+            "id": "modifier_must_have_restrictflags_for_requested_change",
+            "description": "The actual requested flag changes must be allowed by the caller's computed restrictflags; disallowed combinations are rejected.",
+            "locally_satisfied": true,
+            "justification": "The call to chanacs_modify(ca, &addflags, &removeflags, restrictflags) returns false when the change is not permitted under restrictflags; in that case, the function emits a not-authorized error and aborts before committing the change."
+          },
+          {
+            "id": "no_founder_on_hostmask",
+            "description": "Founder status must never be granted to a hostmask-based ACL entry.",
+            "locally_satisfied": true,
+            "justification": "In the hostmask branch (validhostmask(target) is true), the function checks if (addflags & CA_FOUNDER) and immediately rejects with a badparams error if so."
+          },
+          {
+            "id": "nonzero_effect_required",
+            "description": "ACL modifications that result in no effective change (no flags added or removed) are considered invalid and are not applied.",
+            "locally_satisfied": true,
+            "justification": "After chanacs_modify and hook invocation, the function checks if ((addflags | removeflags) == 0); if true, it reports 'unchanged' and returns, ensuring that presumed modifications that do nothing are explicitly treated as no-op."
+          }
+        ]
+      }
+    ]
+  }
+]

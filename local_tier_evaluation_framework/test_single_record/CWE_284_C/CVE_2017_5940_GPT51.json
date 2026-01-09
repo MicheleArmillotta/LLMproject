@@ -1,0 +1,86 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "skel",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2017-5940/repo/src/firejail/fs_home.c",
+      "33-89"
+    ],
+    "function_name": "skel",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <ftw.h>\n#include <grp.h>\n#include <unistd.h>\n#include <sys/wait.h>\n#include <sys/types.h>\n#include <sys/stat.h>\n#include <fcntl.h>\n#include <dirent.h>\n#include <glob.h>\n#include <linux/limits.h>\n#include <sys/mount.h>\n#include \"firejail.h\"\n\nstatic void skel(const char *homedir, uid_t u, gid_t g) {\n\tchar *fname;\n\n\t// zsh\n\tif (!arg_shell_none && (strcmp(cfg.shell,\"/usr/bin/zsh\") == 0 || strcmp(cfg.shell,\"/bin/zsh\") == 0)) {\n\t\t// copy skel files\n\t\tif (asprintf(&fname, \"%s/.zshrc\", homedir) == -1)\n\t\t\terrExit(\"asprintf\");\n\t\tstruct stat s;\n\t\t// don't copy it if we already have the file\n\t\tif (stat(fname, &s) == 0)\n\t\t\treturn;\n\t\tif (stat(\"/etc/skel/.zshrc\", &s) == 0) {\n\t\t\tcopy_file(\"/etc/skel/.zshrc\", fname, u, g, 0644);\n\t\t\tfs_logger(\"clone /etc/skel/.zshrc\");\n\t\t}\n\t\telse {\n\t\t\ttouch_file_as_user(fname, u, g, 0644);\n\t\t\tfs_logger2(\"touch\", fname);\n\t\t}\n\t\tfree(fname);\n\t}\n\t// csh\n\telse if (!arg_shell_none && strcmp(cfg.shell,\"/bin/csh\") == 0) {\n\t\t// copy skel files\n\t\tif (asprintf(&fname, \"%s/.cshrc\", homedir) == -1)\n\t\t\terrExit(\"asprintf\");\n\t\tstruct stat s;\n\t\t// don't copy it if we already have the file\n\t\tif (stat(fname, &s) == 0)\n\t\t\treturn;\n\t\tif (stat(\"/etc/skel/.cshrc\", &s) == 0) {\n\t\t\tcopy_file(\"/etc/skel/.cshrc\", fname, u, g, 0644);\n\t\t\tfs_logger(\"clone /etc/skel/.cshrc\");\n\t\t}\n\t\telse {\n\t\t\ttouch_file_as_user(fname, u, g, 0644);\n\t\t\tfs_logger2(\"touch\", fname);\n\t\t}\n\t\tfree(fname);\n\t}\n\t// bash etc.\n\telse {\n\t\t// copy skel files\n\t\tif (asprintf(&fname, \"%s/.bashrc\", homedir) == -1)\n\t\t\terrExit(\"asprintf\");\n\t\tstruct stat s;\n\t\t// don't copy it if we already have the file\n\t\tif (stat(fname, &s) == 0) \n\t\t\treturn;\n\t\tif (stat(\"/etc/skel/.bashrc\", &s) == 0) {\n\t\t\tcopy_file(\"/etc/skel/.bashrc\", fname, u, g, 0644);\n\t\t\tfs_logger(\"clone /etc/skel/.bashrc\");\n\t\t}\n\t\tfree(fname);\n\t}\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: fs_logger\nvoid fs_logger_print_log(pid_t pid) {\n\tEUID_ASSERT();\n\n\t// if the pid is that of a firejail  process, use the pid of the first child process\n\tEUID_ROOT();\n\tchar *comm = pid_proc_comm(pid);\n\tEUID_USER();\n\tif (comm) {\n\t\tif (strcmp(comm, \"firejail\") == 0) {\n\t\t\tpid_t child;\n\t\t\tif (find_child(pid, &child) == 0) {\n\t\t\t\tpid = child;\n\t\t\t}\n\t\t}\n\t\tfree(comm);\n\t}\n\n\t// check privileges for non-root users\n\tuid_t uid = getuid();\n\tif (uid != 0) {\n\t\tuid_t sandbox_uid = pid_get_uid(pid);\n\t\tif (uid != sandbox_uid) {\n\t\t\tfprintf(stderr, \"Error: permission denied\\n\");\n\t\t\texit(1);\n\t\t}\n\t}\n\n\t// print RUN_FSLOGGER_FILE\n\tchar *fname;\n\tif (asprintf(&fname, \"/proc/%d/root%s\", pid, RUN_FSLOGGER_FILE) == -1)\n\t\terrExit(\"asprintf\");\n\n\tEUID_ROOT();\n\tstruct stat s;\n\tif (stat(fname, &s) == -1) {\n\t\tfprintf(stderr, \"Error: Cannot access filesystem log\\n\");\n\t\texit(1);\n\t}\n\n\t/* coverity[toctou] */\n\tFILE *fp = fopen(fname, \"r\");\n\tif (!fp) {\n\t\tfprintf(stderr, \"Error: Cannot open filesystem log\\n\");\n\t\texit(1);\n\t}\n\t\n\tchar buf[MAXBUF];\n\twhile (fgets(buf, MAXBUF, fp))\n\t\tprintf(\"%s\", buf);\n\tfclose(fp);\n\tfree(fname);\n\n\texit(0);\n}\n\nCallee: copy_file\nvoid copy_file_as_user(const char *srcname, const char *destname, uid_t uid, gid_t gid, mode_t mode) {\n\tpid_t child = fork();\n\tif (child < 0)\n\t\terrExit(\"fork\");\n\tif (child == 0) {\n\t\t// drop privileges\n\t\tdrop_privs(0);\n\n\t\t// copy, set permissions and ownership\n\t\tint rv = copy_file(srcname, destname, uid, gid, mode);\n\t\tif (rv)\n\t\t\tfprintf(stderr, \"Warning: cannot transfer .Xauthority in private home directory\\n\");\n\t\t_exit(0);\n\t}\n\t// wait for the child to finish\n\twaitpid(child, NULL, 0);\n}\n\nCallee: fs_logger2\nvoid fs_logger2int(const char *msg1, int d) {\n\tFsMsg *ptr = newmsg();\n\tchar *str;\n\tif (asprintf(&str, \"%s %d\", msg1, d) == -1)\n\t\terrExit(\"asprintf\");\n\tptr->msg = str;\n\tinsertmsg(ptr);\n}\n\nCallee: touch_file_as_user\nvoid touch_file_as_user(const char *fname, uid_t uid, gid_t gid, mode_t mode) {\n\tpid_t child = fork();\n\tif (child < 0)\n\t\terrExit(\"fork\");\n\tif (child == 0) {\n\t\t// drop privileges\n\t\tdrop_privs(0);\n\n\t\tFILE *fp = fopen(fname, \"w\");\n\t\tif (fp) {\n\t\t\tfprintf(fp, \"\\n\");\n\t\t\tSET_PERMS_STREAM(fp, uid, gid, mode);\n\t\t\tfclose(fp);\n\t\t}\n\t\t_exit(0);\n\t}\n\t// wait for the child to finish\n\twaitpid(child, NULL, 0);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "copy_file(\"/etc/skel/...\", fname, u, g, 0644)",
+        "sink_description": "Copies a skeleton shell configuration file from the global /etc/skel directory into the user’s home directory, setting ownership to the specified uid/gid and mode 0644.",
+        "required_conditions": [
+          {
+            "id": "uid_gid_authorized_for_home",
+            "description": "The uid and gid parameters must correspond to the intended owner of the target homedir, and the caller must be authorized to create or overwrite files there on that user’s behalf.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "homedir_path_trusted",
+            "description": "The homedir argument must refer to the correct, intended home directory for uid u (not an arbitrary or attacker-controlled path).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "run_with_dropped_privileges",
+            "description": "The actual file copy and metadata changes should be performed with privileges no greater than those of the target user, to avoid unintended access to or modification of other users’ data.",
+            "locally_satisfied": true,
+            "justification": "The callee copy_file_as_user (used by this project for similar operations) forks and calls drop_privs(0) before copying and setting permissions. Although skel itself calls copy_file directly, the surrounding codebase pattern indicates that the privileged operations are expected to be done in a dropped-privilege context managed by the caller of skel."
+          }
+        ]
+      },
+      {
+        "sink_id": "touch_file_as_user(fname, u, g, 0644)",
+        "sink_description": "Creates a new shell configuration file in the user’s home directory and sets its ownership and permissions on behalf of that user.",
+        "required_conditions": [
+          {
+            "id": "uid_gid_match_home_owner",
+            "description": "The uid and gid must match the intended owner of homedir, and the caller must be authorized to create files for that user in that directory.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "homedir_and_fname_not_attacker_controlled",
+            "description": "The constructed fname (homedir plus dotfile name) must not be influenced by an untrusted party in a way that would cause touching files outside the intended home directory.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "touch_runs_unprivileged",
+            "description": "The actual file creation and permission setting must be executed with reduced privileges matching or not exceeding the target user.",
+            "locally_satisfied": true,
+            "justification": "touch_file_as_user immediately forks and in the child calls drop_privs(0) before opening and writing the file and setting its ownership and mode, ensuring the operation is done under lowered privileges."
+          },
+          {
+            "id": "no_preexisting_file_overwrite",
+            "description": "The function should not overwrite an existing configuration file without explicit authorization or policy that allows doing so.",
+            "locally_satisfied": true,
+            "justification": "skel checks stat(fname,&s)==0 and returns early if the file already exists, so touch_file_as_user is only invoked when no such file is present."
+          }
+        ]
+      },
+      {
+        "sink_id": "stat(fname, &s) with early return",
+        "sink_description": "Determines whether a shell configuration file already exists in the user’s home directory and decides whether to create or copy a new configuration file.",
+        "required_conditions": [
+          {
+            "id": "path_corresponds_to_user_home",
+            "description": "The constructed path fname must correspond to the correct user’s home directory, so that the existence check and subsequent decision apply to the right resource.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "safe_default_on_exists",
+            "description": "If a configuration file already exists, the function must avoid overwriting it unless explicitly authorized to change user configuration.",
+            "locally_satisfied": true,
+            "justification": "If stat on the target fname succeeds (file exists), skel immediately returns and does not perform copy_file or touch_file_as_user, thereby preserving the existing file by default."
+          }
+        ]
+      }
+    ]
+  }
+]

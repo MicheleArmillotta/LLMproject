@@ -1,0 +1,44 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "socket_create",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2016-5104/repo/common/socket.c",
+      "146-191"
+    ],
+    "function_name": "socket_create",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"socket.h\"\n#include <arpa/inet.h>\n#include <netdb.h>\n#include <netinet/in.h>\n#include <sys/un.h>\n#include <sys/socket.h>\n#include <windows.h>\n#include <winsock2.h>\n#include <sys/stat.h>\n#include <sys/time.h>\n#include <errno.h>\n#include <unistd.h>\n#include <string.h>\n#include <stdlib.h>\n#include <stddef.h>\n#include <stdio.h>\n\nint socket_create(uint16_t port)\n{\n\tint sfd = -1;\n\tint yes = 1;\n#ifdef WIN32\n\tWSADATA wsa_data;\n\tif (!wsa_init) {\n\t\tif (WSAStartup(MAKEWORD(2,2), &wsa_data) != ERROR_SUCCESS) {\n\t\t\tfprintf(stderr, \"WSAStartup failed!\\n\");\n\t\t\tExitProcess(-1);\n\t\t}\n\t\twsa_init = 1;\n\t}\n#endif\n\tstruct sockaddr_in saddr;\n\n\tif (0 > (sfd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP))) {\n\t\tperror(\"socket()\");\n\t\treturn -1;\n\t}\n\n\tif (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (void*)&yes, sizeof(int)) == -1) {\n\t\tperror(\"setsockopt()\");\n\t\tsocket_close(sfd);\n\t\treturn -1;\n\t}\n\n\tmemset((void *) &saddr, 0, sizeof(saddr));\n\tsaddr.sin_family = AF_INET;\n\tsaddr.sin_addr.s_addr = htonl(INADDR_ANY);\n\tsaddr.sin_port = htons(port);\n\n\tif (0 > bind(sfd, (struct sockaddr *) &saddr, sizeof(saddr))) {\n\t\tperror(\"bind()\");\n\t\tsocket_close(sfd);\n\t\treturn -1;\n\t}\n\n\tif (listen(sfd, 1) == -1) {\n\t\tperror(\"listen()\");\n\t\tsocket_close(sfd);\n\t\treturn -1;\n\t}\n\n\treturn sfd;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: socket_close\nint socket_close(int fd) {\n#ifdef WIN32\n\treturn closesocket(fd);\n#else\n\treturn close(fd);\n#endif\n}\n\nCallee: socket\nint socket_send(int fd, void *data, size_t length)\n{\n\treturn send(fd, data, length, 0);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "bind(sfd, (struct sockaddr *) &saddr, sizeof(saddr))",
+        "sink_description": "Creates and binds a TCP listening socket on the specified port and all network interfaces (INADDR_ANY), exposing a network service.",
+        "required_conditions": [
+          {
+            "id": "port_binding_authorized",
+            "description": "The caller must be authorized to open and bind a listening TCP socket on the specified port and interface(s).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "port_value_trusted",
+            "description": "The port value provided to the function must be constrained so that only intended ports can be opened for listening.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "listen(sfd, 1)",
+        "sink_description": "Marks the bound socket as a listening socket, enabling it to accept incoming connections on the chosen port.",
+        "required_conditions": [
+          {
+            "id": "listening_service_allowed",
+            "description": "Establishing a listening TCP service on the chosen port must be restricted to authorized callers or processes.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

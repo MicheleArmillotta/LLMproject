@@ -1,0 +1,73 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "get_wml_location",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2015-5069/snippet_1/code_before.cpp",
+      "993-1052"
+    ],
+    "function_name": "get_wml_location",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <CoreFoundation/CFBase.h>\n#include <CoreFoundation/CFString.h>\n#include <CoreFoundation/CoreFoundation.h>\n#include <boost/foreach.hpp>\n#include \"version.hpp\"\n#include \"serialization/unicode.hpp\"\n#include \"serialization/string_utils.hpp\"\n#include \"scoped_resource.hpp\"\n#include \"log.hpp\"\n#include \"game_preferences.hpp\"\n#include \"game_config.hpp\"\n#include \"filesystem.hpp\"\n#include \"config.hpp\"\n#include <cstring>\n#include <boost/algorithm/string.hpp>\n#include <set>\n#include <iomanip>\n#include <fstream>\n#include <cerrno>\n#include <libgen.h>\n#include <dirent.h>\n#include <unistd.h>\n#include <cctype>\n#include \"filesystem_win32.ii\"\n#include <sys/stat.h>\n#include \"global.hpp\"\n\n#define ERR_FS LOG_STREAM(err, log_filesystem)\n#define LOG_FS LOG_STREAM(info, log_filesystem)\n#define DBG_FS LOG_STREAM(debug, log_filesystem)\n\nstd::string get_wml_location(const std::string &filename, const std::string &current_dir)\n{\n\tDBG_FS << \"Looking for '\" << filename << \"'.\" << std::endl;\n\n\tassert(game_config::path.empty() == false);\n\n\tstd::string result;\n\n\tif (filename.empty()) {\n\t\tLOG_FS << \"  invalid filename\" << std::endl;\n\t\treturn result;\n\t}\n\n\tif (filename.find(\"..\") != std::string::npos) {\n\t\tERR_FS << \"Illegal path '\" << filename << \"' (\\\"..\\\" not allowed).\" << std::endl;\n\t\treturn result;\n\t}\n\n\tbool already_found = false;\n\n\tif (filename[0] == '~')\n\t{\n\t\t// If the filename starts with '~', look in the user data directory.\n\t\tresult = get_user_data_dir() + \"/data/\" + filename.substr(1);\n\t\tDBG_FS << \"  trying '\" << result << \"'\" << std::endl;\n\n\t\talready_found = file_exists(result) || is_directory(result);\n\t}\n\telse if (filename.size() >= 2 && filename[0] == '.' && filename[1] == '/')\n\t{\n\t\t// If the filename begins with a \"./\", look in the same directory\n\t\t// as the file currently being preprocessed.\n\n\t\tif (!current_dir.empty())\n\t\t{\n\t\t\tresult = current_dir;\n\t\t}\n\t\telse\n\t\t{\n\t\t\tresult = game_config::path;\n\t\t}\n\n\t\tresult += filename.substr(2);\n\t}\n\telse if (!game_config::path.empty())\n\t\tresult = game_config::path + \"/data/\" + filename;\n\n\tDBG_FS << \"  trying '\" << result << \"'\" << std::endl;\n\n\tif (result.empty() ||\n\t    (!already_found && !file_exists(result) && !is_directory(result)))\n\t{\n\t\tDBG_FS << \"  not found\" << std::endl;\n\t\tresult.clear();\n\t}\n\telse\n\t\tDBG_FS << \"  found: '\" << result << \"'\" << std::endl;\n\n\treturn result;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: is_directory\nbool is_directory(const std::string& fname)\n{\n\tif(fname.empty()) {\n\t\treturn false;\n\t}\n\tif(fname[0] != '/' && !game_config::path.empty()) {\n\t\tif(is_directory_internal(game_config::path + \"/\" + fname))\n\t\t\treturn true;\n\t}\n\n\treturn is_directory_internal(fname);\n}\n\nCallee: file_exists\nbool file_exists(const std::string& name)\n{\n#ifdef _WIN32\n       struct stat st;\n       return (::stat(name.c_str(), &st) == 0);\n#else\n\tstruct stat st;\n\treturn (::stat(name.c_str(), &st) != -1);\n#endif\n}\n\nCallee: get_user_data_dir\nstd::string get_user_data_dir()\n{\n\t// ensure setup gets called only once per session\n\t// FIXME: this is okay and optimized, but how should we react\n\t// if the user deletes a dir while we are running?\n\tif (user_data_dir.empty())\n\t{\n\t\tset_user_data_dir(std::string());\n\t}\n\treturn user_data_dir;\n}\n",
+    "sinks": [
+      {
+        "sink_id": "return result;",
+        "sink_description": "Returns a filesystem path to the caller based on the provided filename and configuration paths (game_config::path, user data dir, current_dir).",
+        "required_conditions": [
+          {
+            "id": "no_parent_traversal",
+            "description": "The input filename must not contain parent directory traversal sequences (\"..\") to avoid exposing paths outside the intended data directory tree.",
+            "locally_satisfied": true,
+            "justification": "The function checks `filename.find(\"..\")` and rejects the request, logging an error and returning an empty string if \"..\" is present."
+          },
+          {
+            "id": "nonempty_filename",
+            "description": "The function should not attempt to resolve or return a path for an empty filename.",
+            "locally_satisfied": true,
+            "justification": "The function checks `filename.empty()` and returns an empty string early while logging an informational message."
+          },
+          {
+            "id": "path_within_game_or_user_data",
+            "description": "Returned paths should be confined to the game installation path or the user data directory, not arbitrary filesystem locations.",
+            "locally_satisfied": true,
+            "justification": "Non-tilde paths are always prefixed with `game_config::path + \"/data/\"` (or `current_dir` when explicitly relative via \"./\"), and tilde paths are prefixed with `get_user_data_dir() + \"/data/\"`; no other base directories are used."
+          },
+          {
+            "id": "avoid_leaking_nonexistent_paths",
+            "description": "The function should not mislead callers or logs with non-existing paths and should indicate lookup failure clearly.",
+            "locally_satisfied": true,
+            "justification": "After constructing `result`, the function checks `file_exists(result)` and `is_directory(result)` unless `already_found` is true; if neither is true, it clears `result` and logs \"not found\" before returning an empty string."
+          }
+        ]
+      },
+      {
+        "sink_id": "DBG_FS / LOG_FS / ERR_FS logging of filename and resolved path",
+        "sink_description": "Logs the requested filename, candidate paths, and whether the file was found to the filesystem log streams.",
+        "required_conditions": [
+          {
+            "id": "filename_not_sensitive",
+            "description": "Filenames and derived paths written to logs must not contain sensitive information (such as secrets or personal data) or must be sanitized before logging.",
+            "locally_satisfied": false,
+            "justification": ""
+          },
+          {
+            "id": "logs_not_exposed_to_untrusted_actors",
+            "description": "Log files containing requested filenames and resolved paths must not be readable by unauthorized users.",
+            "locally_satisfied": false,
+            "justification": ""
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "is_legal_file",
+      "is_legal_file",
+      "989-1004"
+    ],
+    "function_name": "is_legal_file",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"version.hpp\"\n#include \"util.hpp\"\n#include \"log.hpp\"\n#include \"game_config.hpp\"\n#include \"config.hpp\"\n#include <windows.h>\n#include <boost/locale.hpp>\n#include <set>\n#include <boost/iostreams/stream.hpp>\n#include <boost/iostreams/device/file_descriptor.hpp>\n#include <boost/system/windows_error.hpp>\n#include <boost/foreach.hpp>\n#include <boost/filesystem/fstream.hpp>\n#include <boost/filesystem.hpp>\n#include \"serialization/unicode.hpp\"\n#include \"filesystem.hpp\"\n#include \"global.hpp\"\n\n#define ERR_FS LOG_STREAM(err, log_filesystem)\n#define LOG_FS LOG_STREAM(info, log_filesystem)\n#define DBG_FS LOG_STREAM(debug, log_filesystem)\n\nstatic bool is_legal_file(const std::string &filename)\n{\n\tDBG_FS << \"Looking for '\" << filename << \"'.\\n\";\n\n\tif (filename.empty()) {\n\t\tLOG_FS << \"  invalid filename\\n\";\n\t\treturn false;\n\t}\n\n\tif (filename.find(\"..\") != std::string::npos) {\n\t\tERR_FS << \"Illegal path '\" << filename << \"' (\\\"..\\\" not allowed).\\n\";\n\t\treturn false;\n\t}\n\n\treturn true;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": []
+  }
+]

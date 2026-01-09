@@ -75,24 +75,44 @@ class CppContextAnalyzer:
         return functions
 
     def _extract_function_info(self, func_node, code, file_path, root):
-        """Extract one function’s details (parameters, calls, returns, etc.)."""
-        func_name = self._get_function_name(func_node, code)
-        if not func_name:
+        """Extract one function's details (parameters, calls, returns, etc.)."""
+        # FIX: Ottieni nome completo E separato
+        func_name_full = self._get_function_name(func_node, code)
+        if not func_name_full:
             return None
         
-        # Skip malformed functions (no body or no braces) #TEST
+        # Skip malformed functions (no body or no braces)
         body = next((c for c in func_node.children if c.type == "compound_statement"), None)
         if not body:
             return None
 
-        # Ottieni la gerarchia dei container (namespace, classi, struct)
-        container = self._get_container_context(func_node, root, code)
+        # FIX: Separa container e nome puro - INIZIALIZZA SEMPRE LE VARIABILI
+        container_from_name = None
+        func_name = func_name_full
+        
+        # Se func_name_full contiene "::", splittalo
+        if "::" in func_name_full:
+            parts = func_name_full.rsplit("::", 1)
+            container_from_name = parts[0]
+            func_name = parts[1]
+
+        # Ottieni container dal contesto (namespace/class gerarchia)
+        container_from_context = self._get_container_context(func_node, root, code)
+
+        # Combina i due: priorità al context, ma se manca usa quello dal name
+        if container_from_context:
+            container = container_from_context
+        elif container_from_name:
+            container = container_from_name
+        else:
+            container = None
 
         # Crea nome qualificato completo
         qualified_name = f"{container}::{func_name}" if container else func_name
 
-        # Estrai parametri, chiamate, valori di ritorno
-        params = self._get_parameters(func_node, code)
+        # FIX: Estrai parametri SOLO diretti della funzione, non nested
+        params = self._get_parameters_direct(func_node, code)
+        
         calls = self._get_call_expressions(func_node, code)
         returns = self._get_return_values(func_node, code)
 
@@ -102,7 +122,7 @@ class CppContextAnalyzer:
         func_code = code[func_node.start_byte:func_node.end_byte].strip()
 
         return {
-            "name": func_name,
+            "name": func_name,  # FIX: Solo nome del metodo
             "qualified_name": qualified_name,
             "container": container,
             "parameters": params,
@@ -119,10 +139,11 @@ class CppContextAnalyzer:
     #  FUNCTION DETAILS
     # ----------------------------------------------------------------
     def _get_function_name(self, func_node, code):
+        """Ottiene il nome completo della funzione (può includere Class::)."""
         for child in func_node.children:
             if child.type == "function_declarator":
                 for sub in child.children:
-                    if sub.type in ("identifier", "field_identifier", "qualified_identifier"):
+                    if sub.type in ("identifier", "field_identifier", "qualified_identifier", "scoped_identifier"):
                         return code[sub.start_byte:sub.end_byte].strip()
         return None
 
@@ -139,7 +160,43 @@ class CppContextAnalyzer:
             current = parent
         return "::".join(reversed(context)) if context else None
 
+    def _get_parameters_direct(self, func_node, code):
+        """
+        FIX: Estrae SOLO i parametri diretti della funzione, non quelli di lambda/nested functions.
+        Cerca il nodo parameter_list che è figlio diretto del function_declarator.
+        """
+        params = []
+        
+        # Trova il function_declarator
+        declarator = None
+        for child in func_node.children:
+            if child.type == "function_declarator":
+                declarator = child
+                break
+        
+        if not declarator:
+            return params
+        
+        # Cerca il parameter_list dentro il declarator
+        param_list = None
+        for child in declarator.children:
+            if child.type == "parameter_list":
+                param_list = child
+                break
+        
+        if not param_list:
+            return params
+        
+        # Estrai solo i parameter_declaration che sono figli DIRETTI del parameter_list
+        for child in param_list.children:
+            if child.type == "parameter_declaration":
+                snippet = code[child.start_byte:child.end_byte].strip()
+                params.append(snippet)
+        
+        return params
+
     def _get_parameters(self, func_node, code):
+        """DEPRECATED: usare _get_parameters_direct invece."""
         params = []
         for param_node in self._walk(func_node, "parameter_declaration"):
             snippet = code[param_node.start_byte:param_node.end_byte].strip()
@@ -161,9 +218,6 @@ class CppContextAnalyzer:
     def _extract_callee_name(self, call_node, code: str) -> str:
         """
         Estrae il nome/descrizione del callee in modo robusto.
-        - Prova a trovare identifier / qualified_identifier / field_identifier.
-        - Se non trova, prende il nodo immediatamente precedente ad argument_list
-          e restituisce lo snippet testuale (fallback utile per chained calls/lambda/etc.)
         """
         # 1) cerca identifier-like direttamente tra i figli
         for child in call_node.children:
@@ -189,7 +243,6 @@ class CppContextAnalyzer:
             candidate = call_node.children[arg_index - 1]
             snippet = code[candidate.start_byte:candidate.end_byte].strip()
             if snippet:
-                # rimuovi le parentesi se presenti
                 if "(" in snippet:
                     snippet = snippet.split("(", 1)[0].strip()
                 return snippet
@@ -204,26 +257,17 @@ class CppContextAnalyzer:
         except Exception:
             return None
 
-
     def _extract_arguments(self, call_node, code: str):
-        """
-        Estrae gli argomenti dal nodo call_expression:
-        - preferisce leggere il nodo 'argument_list' e ricostruire gli argomenti a partire dai figli,
-          evitando split testuali non affidabili quando possibile.
-        - fallback: estrazione testuale centrale (rimuove parentesi esterne).
-        """
+        """Estrae gli argomenti dal nodo call_expression."""
         args = []
 
         # Prima cerca il nodo argument_list esplicito
         for child in call_node.children:
             if child.type == "argument_list":
-                # costruisci argomenti guardando i figli del nodo
-                # i figli tipici: '(', expr, ',', expr, ')'
                 current = []
                 for node in child.children:
                     text = code[node.start_byte:node.end_byte]
                     if node.type == ",":
-                        # separatore: chiudi l'arg corrente
                         arg = "".join(current).strip()
                         if arg:
                             args.append(arg)
@@ -232,19 +276,17 @@ class CppContextAnalyzer:
                         continue
                     else:
                         current.append(text)
-                # ultima arg
                 if current:
                     arg = "".join(current).strip()
                     if arg:
                         args.append(arg)
                 return args
 
-        # Se non c'è argument_list, fai fallback testuale: estrai testo dentro le prime parentesi
+        # Fallback testuale
         try:
             s = code[call_node.start_byte:call_node.end_byte]
             if "(" in s and ")" in s:
                 inner = s.split("(", 1)[1].rsplit(")", 1)[0]
-                # semplice split ma rimuove spazi esterni; non perfetto per template con virgole, ma ok come fallback
                 parts = [p.strip() for p in inner.split(",")]
                 args = [p for p in parts if p != ""]
         except Exception:
@@ -252,36 +294,24 @@ class CppContextAnalyzer:
 
         return args
     
-
-    #def _get_return_values(self, func_node, code):
-    #    returns = []
-    #    for ret_node in self._walk(func_node, "return_statement"):
-    #        snippet = code[ret_node.start_byte:ret_node.end_byte].strip()
-    #        returns.append(snippet)
-    #    return returns
-    
     def _get_return_values(self, func_node, code: str):
         returns = []
         for ret_node in self._walk(func_node, "return_statement"):
             # Ignora i return dentro lambda o funzioni locali
             if self._is_within_nested_function(ret_node, func_node):
                 continue
-            start = code[:ret_node.start_byte].count("\n") + 1
             snippet = code[ret_node.start_byte:ret_node.end_byte].strip()
             returns.append(snippet)
         return returns
 
     def _is_within_nested_function(self, node, parent_func):
-        """
-        True se 'node' si trova dentro un'altra funzione o lambda rispetto al 'parent_func'.
-        """
+        """True se 'node' si trova dentro un'altra funzione o lambda rispetto al 'parent_func'."""
         current = node.parent
         while current is not None and current != parent_func:
             if current.type in ("function_definition", "lambda_expression"):
                 return True
             current = current.parent
         return False
-
 
     # ----------------------------------------------------------------
     #  UTILS

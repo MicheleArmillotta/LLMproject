@@ -1,0 +1,14 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "parseuid",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2019-15900/repo/doas.c",
+      "84-102"
+    ],
+    "function_name": "parseuid",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"doas.h\"\n#include \"pm_pam_conv.h\"\n#include <security/pam_misc.h>\n#include <security/openpam.h>\n#include <security/pam_appl.h>\n#include <readpassphrase.h>\n#include <bsd_auth.h>\n#include <login_cap.h>\n#include <fcntl.h>\n#include <errno.h>\n#include <syslog.h>\n#include <grp.h>\n#include <pwd.h>\n#include <unistd.h>\n#include <err.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <string.h>\n#include <limits.h>\n#include <inttypes.h>\n#include <sys/ioctl.h>\n#include <sys/stat.h>\n#include <sys/types.h>\n\nstatic int\nparseuid(const char *s, uid_t *uid)\n{\n\tstruct passwd *pw;\n\tconst char *errstr;\n\n\tif ((pw = getpwnam(s)) != NULL) {\n\t\t*uid = pw->pw_uid;\n\t\treturn 0;\n\t}\n\t#if !defined(__linux__) && !defined(__NetBSD__)\n\t*uid = strtonum(s, 0, UID_MAX, &errstr);\n\t#else\n\tsscanf(s, \"%d\", uid);\n\t#endif\n\tif (errstr)\n\t\treturn -1;\n\treturn 0;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "Vulnerable": false,
+    "Description": "The provided function parseuid only converts a user identifier string into a uid_t using getpwnam or numeric parsing. It does not perform any privileged action, authorization decision, or access to protected resources; it merely returns a UID value based on input. As such, there is no access control policy to enforce within this helper, and no CWE-284 improper access control can be identified from this code alone. Whether the caller later misuses the returned UID is outside the scope of this function."
+  }
+]

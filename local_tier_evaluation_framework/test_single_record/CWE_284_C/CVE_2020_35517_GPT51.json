@@ -1,0 +1,122 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "setup_namespaces",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2020-35517/repo/tools/virtiofsd/passthrough_ll.c",
+      "2393-2488"
+    ],
+    "function_name": "setup_namespaces",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"passthrough_seccomp.h\"\n#include \"passthrough_helpers.h\"\n#include <unistd.h>\n#include <syslog.h>\n#include <sys/xattr.h>\n#include <sys/wait.h>\n#include <sys/types.h>\n#include <sys/syscall.h>\n#include <sys/resource.h>\n#include <sys/prctl.h>\n#include <sys/mount.h>\n#include <sys/file.h>\n#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <stddef.h>\n#include <stdbool.h>\n#include <pthread.h>\n#include <limits.h>\n#include <inttypes.h>\n#include <glib.h>\n#include <errno.h>\n#include <dirent.h>\n#include <cap-ng.h>\n#include <assert.h>\n#include \"fuse_lowlevel.h\"\n#include \"fuse_log.h\"\n#include \"fuse_virtio.h\"\n#include \"qemu/timer.h\"\n#include \"qemu/osdep.h\"\n\nstatic void unref_inode_lolocked(struct lo_data *lo, struct lo_inode *inode,\n                                 uint64_t n);\n\nstatic void setup_namespaces(struct lo_data *lo, struct fuse_session *se)\n{\n    pid_t child;\n    char template[] = \"virtiofsd-XXXXXX\";\n    char *tmpdir;\n\n    /*\n     * Create a new pid namespace for *child* processes.  We'll have to\n     * fork in order to enter the new pid namespace.  A new mount namespace\n     * is also needed so that we can remount /proc for the new pid\n     * namespace.\n     *\n     * Our UNIX domain sockets have been created.  Now we can move to\n     * an empty network namespace to prevent TCP/IP and other network\n     * activity in case this process is compromised.\n     */\n    if (unshare(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET) != 0) {\n        fuse_log(FUSE_LOG_ERR, \"unshare(CLONE_NEWPID | CLONE_NEWNS): %m\\n\");\n        exit(1);\n    }\n\n    child = fork();\n    if (child < 0) {\n        fuse_log(FUSE_LOG_ERR, \"fork() failed: %m\\n\");\n        exit(1);\n    }\n    if (child > 0) {\n        pid_t waited;\n        int wstatus;\n\n        setup_wait_parent_capabilities();\n\n        /* The parent waits for the child */\n        do {\n            waited = waitpid(child, &wstatus, 0);\n        } while (waited < 0 && errno == EINTR && !se->exited);\n\n        /* We were terminated by a signal, see fuse_signals.c */\n        if (se->exited) {\n            exit(0);\n        }\n\n        if (WIFEXITED(wstatus)) {\n            exit(WEXITSTATUS(wstatus));\n        }\n\n        exit(1);\n    }\n\n    /* Send us SIGTERM when the parent thread terminates, see prctl(2) */\n    prctl(PR_SET_PDEATHSIG, SIGTERM);\n\n    /*\n     * If the mounts have shared propagation then we want to opt out so our\n     * mount changes don't affect the parent mount namespace.\n     */\n    if (mount(NULL, \"/\", NULL, MS_REC | MS_SLAVE, NULL) < 0) {\n        fuse_log(FUSE_LOG_ERR, \"mount(/, MS_REC|MS_SLAVE): %m\\n\");\n        exit(1);\n    }\n\n    /* The child must remount /proc to use the new pid namespace */\n    if (mount(\"proc\", \"/proc\", \"proc\",\n              MS_NODEV | MS_NOEXEC | MS_NOSUID | MS_RELATIME, NULL) < 0) {\n        fuse_log(FUSE_LOG_ERR, \"mount(/proc): %m\\n\");\n        exit(1);\n    }\n\n    tmpdir = mkdtemp(template);\n    if (!tmpdir) {\n        fuse_log(FUSE_LOG_ERR, \"tmpdir(%s): %m\\n\", template);\n        exit(1);\n    }\n\n    if (mount(\"/proc/self/fd\", tmpdir, NULL, MS_BIND, NULL) < 0) {\n        fuse_log(FUSE_LOG_ERR, \"mount(/proc/self/fd, %s, MS_BIND): %m\\n\",\n                 tmpdir);\n        exit(1);\n    }\n\n    /* Now we can get our /proc/self/fd directory file descriptor */\n    lo->proc_self_fd = open(tmpdir, O_PATH);\n    if (lo->proc_self_fd == -1) {\n        fuse_log(FUSE_LOG_ERR, \"open(%s, O_PATH): %m\\n\", tmpdir);\n        exit(1);\n    }\n\n    if (umount2(tmpdir, MNT_DETACH) < 0) {\n        fuse_log(FUSE_LOG_ERR, \"umount2(%s, MNT_DETACH): %m\\n\", tmpdir);\n        exit(1);\n    }\n\n    if (rmdir(tmpdir) < 0) {\n        fuse_log(FUSE_LOG_ERR, \"rmdir(%s): %m\\n\", tmpdir);\n    }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: fuse_log\nvoid fuse_log(enum fuse_log_level level, const char *fmt, ...)\n{\n    va_list ap;\n\n    va_start(ap, fmt);\n    log_func(level, fmt, ap);\n    va_end(ap);\n}\n\nCallee: exit\nint fuse_session_exited(struct fuse_session *se)\n{\n    return se->exited;\n}\n\nCallee: open\nint fuse_reply_open(fuse_req_t req, const struct fuse_file_info *f)\n{\n    struct fuse_open_out arg;\n\n    memset(&arg, 0, sizeof(arg));\n    fill_open(&arg, f);\n    return send_reply_ok(req, &arg, sizeof(arg));\n}\n\nCallee: setup_wait_parent_capabilities\nstatic void setup_wait_parent_capabilities(void)\n{\n    capng_setpid(syscall(SYS_gettid));\n    capng_clear(CAPNG_SELECT_BOTH);\n    capng_apply(CAPNG_SELECT_BOTH);\n}\n",
+    "sinks": [
+      {
+        "sink_id": "unshare(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET)",
+        "sink_description": "Creates new PID, mount, and network namespaces, isolating the process and affecting where subsequent privileged operations are performed.",
+        "required_conditions": [
+          {
+            "id": "caller_intended_to_isolate_into_new_namespaces",
+            "description": "The caller or deployment context must intend that this process enter new PID, mount, and network namespaces and accept the associated privilege and visibility changes.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "sufficient_privileges_for_unshare",
+            "description": "The process must have sufficient privileges (e.g., CAP_SYS_ADMIN and CAP_SYS_ADMIN in user namespace) to create new PID, mount, and network namespaces.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "fork() plus parent wait/exit logic",
+        "sink_description": "Forks into a parent/child pair where the parent manages capabilities and lifetime, and the child continues as the main service inside new namespaces.",
+        "required_conditions": [
+          {
+            "id": "parent_process_trust_and_control",
+            "description": "The design must assume that the parent process is trusted to wait for and supervise the child and to terminate appropriately based on the child's status.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "mount(NULL, \"/\", NULL, MS_REC | MS_SLAVE, NULL)",
+        "sink_description": "Changes mount propagation on the root filesystem to MS_SLAVE|MS_REC, affecting how mount events propagate between namespaces.",
+        "required_conditions": [
+          {
+            "id": "privileged_mount_allowed",
+            "description": "The process must be authorized to change mount propagation on the root filesystem (typically requires CAP_SYS_ADMIN in the target mount namespace).",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "mount_propagation_change_intended",
+            "description": "It must be intended that this process opts out of shared mount propagation so its mount changes do not affect the parent namespace.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "mount(\"proc\", \"/proc\", \"proc\", MS_NODEV | MS_NOEXEC | MS_NOSUID | MS_RELATIME, NULL)",
+        "sink_description": "Remounts /proc inside the new PID namespace so that process information is scoped to that namespace.",
+        "required_conditions": [
+          {
+            "id": "remount_proc_authorized",
+            "description": "The process must have the necessary privilege to remount /proc inside the new namespace.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "proc_visibility_policy_respected",
+            "description": "Remounting /proc must be consistent with the intended process visibility and containment policy for this daemon.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "tmpdir = mkdtemp(template) / mount(\"/proc/self/fd\", tmpdir, ...) / open(tmpdir, O_PATH)",
+        "sink_description": "Creates a temporary directory, bind-mounts /proc/self/fd into it, and opens it with O_PATH to obtain a directory file descriptor used later for privileged file descriptor operations.",
+        "required_conditions": [
+          {
+            "id": "temporary_directory_location_safe",
+            "description": "The location of the mkdtemp-created directory must be secure (not attacker-controlled) so that the bind mount and subsequent open do not expose sensitive resources to untrusted parties.",
+            "locally_satisfied": true,
+            "justification": "mkdtemp() is called on a stack template string without a path component, so it uses the default secure temporary directory (typically /tmp) and ensures a unique name with correct permissions."
+          },
+          {
+            "id": "bind_mount_fd_dir_authorized",
+            "description": "The process must be authorized to perform the bind mount of /proc/self/fd into the temporary directory and then open it for later use.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "umount2(tmpdir, MNT_DETACH) and rmdir(tmpdir)",
+        "sink_description": "Unmounts and removes the temporary directory used for the bind-mounted /proc/self/fd, affecting mount table and filesystem state.",
+        "required_conditions": [
+          {
+            "id": "unmount_tmpdir_authorized",
+            "description": "The process must be authorized to unmount the bind mount at the temporary directory location.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      },
+      {
+        "sink_id": "prctl(PR_SET_PDEATHSIG, SIGTERM)",
+        "sink_description": "Configures the process to receive SIGTERM when its parent dies, tying its lifecycle to the parent.",
+        "required_conditions": [
+          {
+            "id": "caller_allows_parent_death_signal_control",
+            "description": "It must be acceptable under the security model that the parent process implicitly controls termination of this process via its own death.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

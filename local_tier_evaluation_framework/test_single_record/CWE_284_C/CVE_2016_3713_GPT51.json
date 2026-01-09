@@ -1,0 +1,26 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "msr_mtrr_valid",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2016-3713/repo/arch/x86/kvm/mtrr.c",
+      "29-51"
+    ],
+    "function_name": "msr_mtrr_valid",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"mmu.h\"\n#include \"cpuid.h\"\n#include <asm/mtrr.h>\n#include <linux/kvm_host.h>\n\nstatic bool msr_mtrr_valid(unsigned msr)\n{\n\tswitch (msr) {\n\tcase 0x200 ... 0x200 + 2 * KVM_NR_VAR_MTRR - 1:\n\tcase MSR_MTRRfix64K_00000:\n\tcase MSR_MTRRfix16K_80000:\n\tcase MSR_MTRRfix16K_A0000:\n\tcase MSR_MTRRfix4K_C0000:\n\tcase MSR_MTRRfix4K_C8000:\n\tcase MSR_MTRRfix4K_D0000:\n\tcase MSR_MTRRfix4K_D8000:\n\tcase MSR_MTRRfix4K_E0000:\n\tcase MSR_MTRRfix4K_E8000:\n\tcase MSR_MTRRfix4K_F0000:\n\tcase MSR_MTRRfix4K_F8000:\n\tcase MSR_MTRRdefType:\n\tcase MSR_IA32_CR_PAT:\n\t\treturn true;\n\tcase 0x2f8:\n\t\treturn true;\n\t}\n\treturn false;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": [
+      {
+        "sink_id": "msr_mtrr_valid",
+        "sink_description": "Determines whether a given MSR number is considered a valid (MTRR/PAT-related) MSR for further handling, which can gate later privileged MSR accesses in the caller.",
+        "required_conditions": [
+          {
+            "id": "msr_access_must_be_authorized",
+            "description": "Only authorized/privileged callers should be able to rely on this validation result to perform subsequent MSR reads/writes.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  }
+]

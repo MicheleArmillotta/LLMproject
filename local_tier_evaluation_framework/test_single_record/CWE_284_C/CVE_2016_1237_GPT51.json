@@ -1,0 +1,62 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "nfsd4_set_nfs4_acl",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2016-1237/repo/fs/nfsd/nfs4acl.c",
+      "754-802"
+    ],
+    "function_name": "nfsd4_set_nfs4_acl",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"vfs.h\"\n#include \"acl.h\"\n#include \"nfsd.h\"\n#include \"nfsfh.h\"\n#include <linux/posix_acl.h>\n#include <linux/slab.h>\n#include <linux/fs.h>\n\n#define NFS4_ACL_DIR\t\t0x02\n\nstatic void _posix_to_nfsv4_one(struct posix_acl *, struct nfs4_acl *,\n\t\t\t\tunsigned int);\n\n__be32\nnfsd4_set_nfs4_acl(struct svc_rqst *rqstp, struct svc_fh *fhp,\n\t\tstruct nfs4_acl *acl)\n{\n\t__be32 error;\n\tint host_error;\n\tstruct dentry *dentry;\n\tstruct inode *inode;\n\tstruct posix_acl *pacl = NULL, *dpacl = NULL;\n\tunsigned int flags = 0;\n\n\t/* Get inode */\n\terror = fh_verify(rqstp, fhp, 0, NFSD_MAY_SATTR);\n\tif (error)\n\t\treturn error;\n\n\tdentry = fhp->fh_dentry;\n\tinode = d_inode(dentry);\n\n\tif (!inode->i_op->set_acl || !IS_POSIXACL(inode))\n\t\treturn nfserr_attrnotsupp;\n\n\tif (S_ISDIR(inode->i_mode))\n\t\tflags = NFS4_ACL_DIR;\n\n\thost_error = nfs4_acl_nfsv4_to_posix(acl, &pacl, &dpacl, flags);\n\tif (host_error == -EINVAL)\n\t\treturn nfserr_attrnotsupp;\n\tif (host_error < 0)\n\t\tgoto out_nfserr;\n\n\thost_error = inode->i_op->set_acl(inode, pacl, ACL_TYPE_ACCESS);\n\tif (host_error < 0)\n\t\tgoto out_release;\n\n\tif (S_ISDIR(inode->i_mode)) {\n\t\thost_error = inode->i_op->set_acl(inode, dpacl,\n\t\t\t\t\t\t  ACL_TYPE_DEFAULT);\n\t}\n\nout_release:\n\tposix_acl_release(pacl);\n\tposix_acl_release(dpacl);\nout_nfserr:\n\tif (host_error == -EOPNOTSUPP)\n\t\treturn nfserr_attrnotsupp;\n\telse\n\t\treturn nfserrno(host_error);\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: nfserrno\n__be32\nnfserrno (int errno)\n{\n\tstatic struct {\n\t\t__be32\tnfserr;\n\t\tint\tsyserr;\n\t} nfs_errtbl[] = {\n\t\t{ nfs_ok, 0 },\n\t\t{ nfserr_perm, -EPERM },\n\t\t{ nfserr_noent, -ENOENT },\n\t\t{ nfserr_io, -EIO },\n\t\t{ nfserr_nxio, -ENXIO },\n\t\t{ nfserr_fbig, -E2BIG },\n\t\t{ nfserr_acces, -EACCES },\n\t\t{ nfserr_exist, -EEXIST },\n\t\t{ nfserr_xdev, -EXDEV },\n\t\t{ nfserr_mlink, -EMLINK },\n\t\t{ nfserr_nodev, -ENODEV },\n\t\t{ nfserr_notdir, -ENOTDIR },\n\t\t{ nfserr_isdir, -EISDIR },\n\t\t{ nfserr_inval, -EINVAL },\n\t\t{ nfserr_fbig, -EFBIG },\n\t\t{ nfserr_nospc, -ENOSPC },\n\t\t{ nfserr_rofs, -EROFS },\n\t\t{ nfserr_mlink, -EMLINK },\n\t\t{ nfserr_nametoolong, -ENAMETOOLONG },\n\t\t{ nfserr_notempty, -ENOTEMPTY },\n#ifdef EDQUOT\n\t\t{ nfserr_dquot, -EDQUOT },\n#endif\n\t\t{ nfserr_stale, -ESTALE },\n\t\t{ nfserr_jukebox, -ETIMEDOUT },\n\t\t{ nfserr_jukebox, -ERESTARTSYS },\n\t\t{ nfserr_jukebox, -EAGAIN },\n\t\t{ nfserr_jukebox, -EWOULDBLOCK },\n\t\t{ nfserr_jukebox, -ENOMEM },\n\t\t{ nfserr_io, -ETXTBSY },\n\t\t{ nfserr_notsupp, -EOPNOTSUPP },\n\t\t{ nfserr_toosmall, -ETOOSMALL },\n\t\t{ nfserr_serverfault, -ESERVERFAULT },\n\t\t{ nfserr_serverfault, -ENFILE },\n\t};\n\tint\ti;\n\n\tfor (i = 0; i < ARRAY_SIZE(nfs_errtbl); i++) {\n\t\tif (nfs_errtbl[i].syserr == errno)\n\t\t\treturn nfs_errtbl[i].nfserr;\n\t}\n\tWARN(1, \"nfsd: non-standard errno: %d\\n\", errno);\n\treturn nfserr_io;\n}\n\nCallee: nfs4_acl_nfsv4_to_posix\nstatic int nfs4_acl_nfsv4_to_posix(struct nfs4_acl *acl,\n\t\tstruct posix_acl **pacl, struct posix_acl **dpacl,\n\t\tunsigned int flags)\n{\n\tstruct posix_acl_state effective_acl_state, default_acl_state;\n\tstruct nfs4_ace *ace;\n\tint ret;\n\n\tret = init_state(&effective_acl_state, acl->naces);\n\tif (ret)\n\t\treturn ret;\n\tret = init_state(&default_acl_state, acl->naces);\n\tif (ret)\n\t\tgoto out_estate;\n\tret = -EINVAL;\n\tfor (ace = acl->aces; ace < acl->aces + acl->naces; ace++) {\n\t\tif (ace->type != NFS4_ACE_ACCESS_ALLOWED_ACE_TYPE &&\n\t\t    ace->type != NFS4_ACE_ACCESS_DENIED_ACE_TYPE)\n\t\t\tgoto out_dstate;\n\t\tif (ace->flag & ~NFS4_SUPPORTED_FLAGS)\n\t\t\tgoto out_dstate;\n\t\tif ((ace->flag & NFS4_INHERITANCE_FLAGS) == 0) {\n\t\t\tprocess_one_v4_ace(&effective_acl_state, ace);\n\t\t\tcontinue;\n\t\t}\n\t\tif (!(flags & NFS4_ACL_DIR))\n\t\t\tgoto out_dstate;\n\t\t/*\n\t\t * Note that when only one of FILE_INHERIT or DIRECTORY_INHERIT\n\t\t * is set, we're effectively turning on the other.  That's OK,\n\t\t * according to rfc 3530.\n\t\t */\n\t\tprocess_one_v4_ace(&default_acl_state, ace);\n\n\t\tif (!(ace->flag & NFS4_ACE_INHERIT_ONLY_ACE))\n\t\t\tprocess_one_v4_ace(&effective_acl_state, ace);\n\t}\n\t*pacl = posix_state_to_acl(&effective_acl_state, flags);\n\tif (IS_ERR(*pacl)) {\n\t\tret = PTR_ERR(*pacl);\n\t\t*pacl = NULL;\n\t\tgoto out_dstate;\n\t}\n\t*dpacl = posix_state_to_acl(&default_acl_state,\n\t\t\t\t\t\tflags | NFS4_ACL_TYPE_DEFAULT);\n\tif (IS_ERR(*dpacl)) {\n\t\tret = PTR_ERR(*dpacl);\n\t\t*dpacl = NULL;\n\t\tposix_acl_release(*pacl);\n\t\t*pacl = NULL;\n\t\tgoto out_dstate;\n\t}\n\tsort_pacl(*pacl);\n\tsort_pacl(*dpacl);\n\tret = 0;\nout_dstate:\n\tfree_state(&default_acl_state);\nout_estate:\n\tfree_state(&effective_acl_state);\n\treturn ret;\n}\n\nCallee: fh_verify\n__be32\nfh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type, int access)\n{\n\tstruct svc_export *exp;\n\tstruct dentry\t*dentry;\n\t__be32\t\terror;\n\n\tdprintk(\"nfsd: fh_verify(%s)\\n\", SVCFH_fmt(fhp));\n\n\tif (!fhp->fh_dentry) {\n\t\terror = nfsd_set_fh_dentry(rqstp, fhp);\n\t\tif (error)\n\t\t\tgoto out;\n\t}\n\tdentry = fhp->fh_dentry;\n\texp = fhp->fh_export;\n\t/*\n\t * We still have to do all these permission checks, even when\n\t * fh_dentry is already set:\n\t * \t- fh_verify may be called multiple times with different\n\t * \t  \"access\" arguments (e.g. nfsd_proc_create calls\n\t * \t  fh_verify(...,NFSD_MAY_EXEC) first, then later (in\n\t * \t  nfsd_create) calls fh_verify(...,NFSD_MAY_CREATE).\n\t *\t- in the NFSv4 case, the filehandle may have been filled\n\t *\t  in by fh_compose, and given a dentry, but further\n\t *\t  compound operations performed with that filehandle\n\t *\t  still need permissions checks.  In the worst case, a\n\t *\t  mountpoint crossing may have changed the export\n\t *\t  options, and we may now need to use a different uid\n\t *\t  (for example, if different id-squashing options are in\n\t *\t  effect on the new filesystem).\n\t */\n\terror = check_pseudo_root(rqstp, dentry, exp);\n\tif (error)\n\t\tgoto out;\n\n\terror = nfsd_setuser_and_check_port(rqstp, exp);\n\tif (error)\n\t\tgoto out;\n\n\terror = nfsd_mode_check(rqstp, d_inode(dentry)->i_mode, type);\n\tif (error)\n\t\tgoto out;\n\n\t/*\n\t * pseudoflavor restrictions are not enforced on NLM,\n\t * which clients virtually always use auth_sys for,\n\t * even while using RPCSEC_GSS for NFS.\n\t */\n\tif (access & NFSD_MAY_LOCK || access & NFSD_MAY_BYPASS_GSS)\n\t\tgoto skip_pseudoflavor_check;\n\t/*\n\t * Clients may expect to be able to use auth_sys during mount,\n\t * even if they use gss for everything else; see section 2.3.2\n\t * of rfc 2623.\n\t */\n\tif (access & NFSD_MAY_BYPASS_GSS_ON_ROOT\n\t\t\t&& exp->ex_path.dentry == dentry)\n\t\tgoto skip_pseudoflavor_check;\n\n\terror = check_nfsd_access(exp, rqstp);\n\tif (error)\n\t\tgoto out;\n\nskip_pseudoflavor_check:\n\t/* Finally, check access permissions. */\n\terror = nfsd_permission(rqstp, exp, dentry, access);\n\n\tif (error) {\n\t\tdprintk(\"fh_verify: %pd2 permission failure, \"\n\t\t\t\"acc=%x, error=%d\\n\",\n\t\t\tdentry,\n\t\t\taccess, ntohl(error));\n\t}\nout:\n\tif (error == nfserr_stale)\n\t\tnfsdstats.fh_stale++;\n\treturn error;\n}\n",
+    "sinks": [
+      {
+        "sink_id": "inode->i_op->set_acl(inode, pacl, ACL_TYPE_ACCESS)",
+        "sink_description": "Sets the POSIX access ACL on the target inode based on the NFSv4 ACL provided by the NFS client, changing filesystem permissions.",
+        "required_conditions": [
+          {
+            "id": "fh_permissions_checked",
+            "description": "The NFS request must be authorized to change attributes (including ACLs) on the referenced filehandle before setting the ACL.",
+            "locally_satisfied": true,
+            "justification": "The function calls fh_verify(rqstp, fhp, 0, NFSD_MAY_SATTR) at the beginning and aborts on error. fh_verify performs export, user, mode, pseudoflavor, and nfsd_permission checks based on NFSD_MAY_SATTR."
+          },
+          {
+            "id": "posix_acl_supported_for_inode",
+            "description": "The target inode must support POSIX ACLs and provide a set_acl inode operation before attempting to set the ACL.",
+            "locally_satisfied": true,
+            "justification": "The function checks !inode->i_op->set_acl || !IS_POSIXACL(inode) and returns nfserr_attrnotsupp if either is false, so it only proceeds when POSIX ACLs and set_acl are supported."
+          },
+          {
+            "id": "acl_input_validated",
+            "description": "The incoming NFSv4 ACL must be validated and converted into a well-formed POSIX ACL before being applied.",
+            "locally_satisfied": true,
+            "justification": "The function calls nfs4_acl_nfsv4_to_posix(acl, &pacl, &dpacl, flags) and handles negative return values, including mapping -EINVAL to nfserr_attrnotsupp and other errors through nfserrno, and only calls set_acl if host_error >= 0."
+          }
+        ]
+      },
+      {
+        "sink_id": "inode->i_op->set_acl(inode, dpacl, ACL_TYPE_DEFAULT)",
+        "sink_description": "Sets the POSIX default ACL on a directory inode based on the NFSv4 ACL, affecting permissions inherited by new children.",
+        "required_conditions": [
+          {
+            "id": "fh_permissions_checked",
+            "description": "The NFS request must be authorized to change attributes (including default ACLs) on the directory filehandle before setting the default ACL.",
+            "locally_satisfied": true,
+            "justification": "Same fh_verify(rqstp, fhp, 0, NFSD_MAY_SATTR) guard applies; if it fails, the function returns early and no ACLs are changed."
+          },
+          {
+            "id": "target_is_directory",
+            "description": "Default ACLs may only be set on directories; the inode must be a directory before setting ACL_TYPE_DEFAULT.",
+            "locally_satisfied": true,
+            "justification": "The call to set_acl with ACL_TYPE_DEFAULT is guarded by if (S_ISDIR(inode->i_mode)) so it only executes for directory inodes."
+          },
+          {
+            "id": "default_acl_input_validated",
+            "description": "The default POSIX ACL derived from the NFSv4 ACL must be validated and successfully constructed before being set.",
+            "locally_satisfied": true,
+            "justification": "nfs4_acl_nfsv4_to_posix constructs dpacl and returns an error on invalid input; the function checks host_error and skips both access and default set_acl calls if conversion failed."
+          }
+        ]
+      }
+    ]
+  }
+]

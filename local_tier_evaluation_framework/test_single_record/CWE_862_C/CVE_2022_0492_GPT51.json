@@ -1,0 +1,38 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "cgroup_release_agent_write",
+      "/home/michele/Desktop/ricerca/output_repos_c/CVE-2022-0492/repo/kernel/cgroup/cgroup-v1.c",
+      "545-561"
+    ],
+    "function_name": "cgroup_release_agent_write",
+    "contextual_snippet": "MAIN FUNCTION:\n#include <trace/events/cgroup.h>\n#include <linux/fs_parser.h>\n#include <linux/cgroupstats.h>\n#include <linux/pid_namespace.h>\n#include <linux/delayacct.h>\n#include <linux/vmalloc.h>\n#include <linux/slab.h>\n#include <linux/magic.h>\n#include <linux/sched/task.h>\n#include <linux/sched/signal.h>\n#include <linux/mm.h>\n#include <linux/delay.h>\n#include <linux/sort.h>\n#include <linux/kmod.h>\n#include <linux/ctype.h>\n#include \"cgroup-internal.h\"\n\nstatic DEFINE_SPINLOCK(release_agent_path_lock);\n\nstatic ssize_t cgroup_release_agent_write(struct kernfs_open_file *of,\n\t\t\t\t\t  char *buf, size_t nbytes, loff_t off)\n{\n\tstruct cgroup *cgrp;\n\n\tBUILD_BUG_ON(sizeof(cgrp->root->release_agent_path) < PATH_MAX);\n\n\tcgrp = cgroup_kn_lock_live(of->kn, false);\n\tif (!cgrp)\n\t\treturn -ENODEV;\n\tspin_lock(&release_agent_path_lock);\n\tstrlcpy(cgrp->root->release_agent_path, strstrip(buf),\n\t\tsizeof(cgrp->root->release_agent_path));\n\tspin_unlock(&release_agent_path_lock);\n\tcgroup_kn_unlock(of->kn);\n\treturn nbytes;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: cgroup_kn_unlock\nvoid cgroup_kn_unlock(struct kernfs_node *kn)\n{\n\tstruct cgroup *cgrp;\n\n\tif (kernfs_type(kn) == KERNFS_DIR)\n\t\tcgrp = kn->priv;\n\telse\n\t\tcgrp = kn->parent->priv;\n\n\tmutex_unlock(&cgroup_mutex);\n\n\tkernfs_unbreak_active_protection(kn);\n\tcgroup_put(cgrp);\n}\n\nCallee: cgroup_kn_lock_live\nstruct cgroup *cgroup_kn_lock_live(struct kernfs_node *kn, bool drain_offline)\n{\n\tstruct cgroup *cgrp;\n\n\tif (kernfs_type(kn) == KERNFS_DIR)\n\t\tcgrp = kn->priv;\n\telse\n\t\tcgrp = kn->parent->priv;\n\n\t/*\n\t * We're gonna grab cgroup_mutex which nests outside kernfs\n\t * active_ref.  cgroup liveliness check alone provides enough\n\t * protection against removal.  Ensure @cgrp stays accessible and\n\t * break the active_ref protection.\n\t */\n\tif (!cgroup_tryget(cgrp))\n\t\treturn NULL;\n\tkernfs_break_active_protection(kn);\n\n\tif (drain_offline)\n\t\tcgroup_lock_and_drain_offline(cgrp);\n\telse\n\t\tmutex_lock(&cgroup_mutex);\n\n\tif (!cgroup_is_dead(cgrp))\n\t\treturn cgrp;\n\n\tcgroup_kn_unlock(kn);\n\treturn NULL;\n}\n",
+    "sinks": [
+      {
+        "sink_id": "strlcpy(cgrp->root->release_agent_path, strstrip(buf), sizeof(cgrp->root->release_agent_path))",
+        "sink_description": "Updates the cgroup root's release_agent_path, which controls the user-space helper command executed when cgroups in this hierarchy are released.",
+        "required_conditions": [
+          {
+            "id": "caller_authorized_to_set_release_agent",
+            "description": "Only appropriately privileged callers (e.g., with administrative rights over the cgroup hierarchy) may change the release_agent_path value.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "path_value_must_be_valid_and_intended_command",
+            "description": "The new release_agent_path taken from buf must be a valid and intended command/path for the release agent, not an attacker-controlled arbitrary command.",
+            "locally_satisfied": false,
+            "justification": null
+          },
+          {
+            "id": "concurrent_updates_synchronized",
+            "description": "Concurrent updates to release_agent_path must be synchronized to avoid races and inconsistent state.",
+            "locally_satisfied": true,
+            "justification": "The function acquires release_agent_path_lock before modifying cgrp->root->release_agent_path and releases it afterward, providing synchronization for concurrent writers."
+          }
+        ]
+      }
+    ]
+  }
+]

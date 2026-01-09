@@ -1,0 +1,79 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "OnMouseEntered",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2022-0309/snippet_1/code_before.cc",
+      "623-627"
+    ],
+    "function_name": "OnMouseEntered",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ui/views/widget/widget.h\"\n#include \"ui/views/view.h\"\n#include \"ui/views/style/typography_provider.h\"\n#include \"ui/views/style/typography.h\"\n#include \"ui/views/layout/flex_layout.h\"\n#include \"ui/views/layout/fill_layout.h\"\n#include \"ui/views/layout/box_layout.h\"\n#include \"ui/views/controls/throbber.h\"\n#include \"ui/views/controls/separator.h\"\n#include \"ui/views/controls/scroll_view.h\"\n#include \"ui/views/controls/menu/menu_config.h\"\n#include \"ui/views/controls/label.h\"\n#include \"ui/views/controls/image_view.h\"\n#include \"ui/views/border.h\"\n#include \"ui/views/background.h\"\n#include \"ui/views/accessibility/view_accessibility.h\"\n#include \"ui/gfx/shadow_value.h\"\n#include \"ui/gfx/paint_vector_icon.h\"\n#include \"ui/gfx/geometry/rect_conversions.h\"\n#include \"ui/gfx/font.h\"\n#include \"ui/gfx/favicon_size.h\"\n#include \"ui/gfx/color_palette.h\"\n#include \"ui/color/color_id.h\"\n#include \"ui/base/resource/resource_bundle.h\"\n#include \"ui/base/models/image_model.h\"\n#include \"ui/base/metadata/metadata_impl_macros.h\"\n#include \"ui/base/metadata/metadata_header_macros.h\"\n#include \"ui/base/l10n/l10n_util.h\"\n#include \"ui/accessibility/ax_node_data.h\"\n#include \"third_party/skia/include/core/SkColor.h\"\n#include \"components/vector_icons/vector_icons.h\"\n#include \"components/strings/grit/components_strings.h\"\n#include \"components/omnibox/browser/vector_icons.h\"\n#include \"components/autofill/core/common/autofill_features.h\"\n#include \"components/autofill/core/browser/ui/suggestion.h\"\n#include \"components/autofill/core/browser/ui/popup_types.h\"\n#include \"components/autofill/core/browser/ui/popup_item_ids.h\"\n#include \"components/autofill/core/browser/data_model/credit_card.h\"\n#include \"components/autofill/core/browser/autofill_experiments.h\"\n#include \"chrome/browser/ui/views/chrome_typography_provider.h\"\n#include \"chrome/browser/ui/views/chrome_typography.h\"\n#include \"chrome/browser/ui/views/chrome_layout_provider.h\"\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller.h\"\n#include \"chrome/browser/platform_util.h\"\n#include \"chrome/app/vector_icons/vector_icons.h\"\n#include \"build/build_config.h\"\n#include \"build/branding_buildflags.h\"\n#include \"base/strings/utf_string_conversions.h\"\n#include \"base/memory/raw_ptr.h\"\n#include \"base/feature_list.h\"\n#include \"base/containers/contains.h\"\n#include <utility>\n#include <type_traits>\n#include <string>\n#include <algorithm>\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_native_views.h\"\n\nAutofillPopupItemView {\n  void AutofillPopupItemView::OnMouseEntered(const ui::MouseEvent& event) {\n    AutofillPopupController* controller = popup_view()->controller();\n    if (controller)\n      controller->SetSelectedLine(GetLineNumber());\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: GetLineNumber\nint AutofillPopupRowView::GetLineNumber() const {\n  return line_number_;\n}\n",
+    "sinks": []
+  },
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "OnMouseExited",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2022-0309/snippet_1/code_before.cc",
+      "629-633"
+    ],
+    "function_name": "OnMouseExited",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ui/views/widget/widget.h\"\n#include \"ui/views/view.h\"\n#include \"ui/views/style/typography_provider.h\"\n#include \"ui/views/style/typography.h\"\n#include \"ui/views/layout/flex_layout.h\"\n#include \"ui/views/layout/fill_layout.h\"\n#include \"ui/views/layout/box_layout.h\"\n#include \"ui/views/controls/throbber.h\"\n#include \"ui/views/controls/separator.h\"\n#include \"ui/views/controls/scroll_view.h\"\n#include \"ui/views/controls/menu/menu_config.h\"\n#include \"ui/views/controls/label.h\"\n#include \"ui/views/controls/image_view.h\"\n#include \"ui/views/border.h\"\n#include \"ui/views/background.h\"\n#include \"ui/views/accessibility/view_accessibility.h\"\n#include \"ui/gfx/shadow_value.h\"\n#include \"ui/gfx/paint_vector_icon.h\"\n#include \"ui/gfx/geometry/rect_conversions.h\"\n#include \"ui/gfx/font.h\"\n#include \"ui/gfx/favicon_size.h\"\n#include \"ui/gfx/color_palette.h\"\n#include \"ui/color/color_id.h\"\n#include \"ui/base/resource/resource_bundle.h\"\n#include \"ui/base/models/image_model.h\"\n#include \"ui/base/metadata/metadata_impl_macros.h\"\n#include \"ui/base/metadata/metadata_header_macros.h\"\n#include \"ui/base/l10n/l10n_util.h\"\n#include \"ui/accessibility/ax_node_data.h\"\n#include \"third_party/skia/include/core/SkColor.h\"\n#include \"components/vector_icons/vector_icons.h\"\n#include \"components/strings/grit/components_strings.h\"\n#include \"components/omnibox/browser/vector_icons.h\"\n#include \"components/autofill/core/common/autofill_features.h\"\n#include \"components/autofill/core/browser/ui/suggestion.h\"\n#include \"components/autofill/core/browser/ui/popup_types.h\"\n#include \"components/autofill/core/browser/ui/popup_item_ids.h\"\n#include \"components/autofill/core/browser/data_model/credit_card.h\"\n#include \"components/autofill/core/browser/autofill_experiments.h\"\n#include \"chrome/browser/ui/views/chrome_typography_provider.h\"\n#include \"chrome/browser/ui/views/chrome_typography.h\"\n#include \"chrome/browser/ui/views/chrome_layout_provider.h\"\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller.h\"\n#include \"chrome/browser/platform_util.h\"\n#include \"chrome/app/vector_icons/vector_icons.h\"\n#include \"build/build_config.h\"\n#include \"build/branding_buildflags.h\"\n#include \"base/strings/utf_string_conversions.h\"\n#include \"base/memory/raw_ptr.h\"\n#include \"base/feature_list.h\"\n#include \"base/containers/contains.h\"\n#include <utility>\n#include <type_traits>\n#include <string>\n#include <algorithm>\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_native_views.h\"\n\nAutofillPopupItemView {\n  void AutofillPopupItemView::OnMouseExited(const ui::MouseEvent& event) {\n    AutofillPopupController* controller = popup_view()->controller();\n    if (controller)\n      controller->SelectionCleared();\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "sinks": [
+      {
+        "sink_id": "controller->SelectionCleared()",
+        "sink_description": "Notifies the AutofillPopupController that the current selection has been cleared when the mouse exits the item view.",
+        "required_conditions": [
+          {
+            "id": "controller_non_null",
+            "description": "popup_view()->controller() must return a non-null pointer before invoking SelectionCleared().",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (controller)` before dereferencing the pointer to call `SelectionCleared()`."
+          },
+          {
+            "id": "controller_trust_boundary",
+            "description": "If SelectionCleared() performs any privileged or state-changing actions on behalf of a user or external caller, the caller should be authorized before this is invoked.",
+            "locally_satisfied": false,
+            "justification": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "OnMouseReleased",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2022-0309/snippet_1/code_before.cc",
+      "635-641"
+    ],
+    "function_name": "OnMouseReleased",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ui/views/widget/widget.h\"\n#include \"ui/views/view.h\"\n#include \"ui/views/style/typography_provider.h\"\n#include \"ui/views/style/typography.h\"\n#include \"ui/views/layout/flex_layout.h\"\n#include \"ui/views/layout/fill_layout.h\"\n#include \"ui/views/layout/box_layout.h\"\n#include \"ui/views/controls/throbber.h\"\n#include \"ui/views/controls/separator.h\"\n#include \"ui/views/controls/scroll_view.h\"\n#include \"ui/views/controls/menu/menu_config.h\"\n#include \"ui/views/controls/label.h\"\n#include \"ui/views/controls/image_view.h\"\n#include \"ui/views/border.h\"\n#include \"ui/views/background.h\"\n#include \"ui/views/accessibility/view_accessibility.h\"\n#include \"ui/gfx/shadow_value.h\"\n#include \"ui/gfx/paint_vector_icon.h\"\n#include \"ui/gfx/geometry/rect_conversions.h\"\n#include \"ui/gfx/font.h\"\n#include \"ui/gfx/favicon_size.h\"\n#include \"ui/gfx/color_palette.h\"\n#include \"ui/color/color_id.h\"\n#include \"ui/base/resource/resource_bundle.h\"\n#include \"ui/base/models/image_model.h\"\n#include \"ui/base/metadata/metadata_impl_macros.h\"\n#include \"ui/base/metadata/metadata_header_macros.h\"\n#include \"ui/base/l10n/l10n_util.h\"\n#include \"ui/accessibility/ax_node_data.h\"\n#include \"third_party/skia/include/core/SkColor.h\"\n#include \"components/vector_icons/vector_icons.h\"\n#include \"components/strings/grit/components_strings.h\"\n#include \"components/omnibox/browser/vector_icons.h\"\n#include \"components/autofill/core/common/autofill_features.h\"\n#include \"components/autofill/core/browser/ui/suggestion.h\"\n#include \"components/autofill/core/browser/ui/popup_types.h\"\n#include \"components/autofill/core/browser/ui/popup_item_ids.h\"\n#include \"components/autofill/core/browser/data_model/credit_card.h\"\n#include \"components/autofill/core/browser/autofill_experiments.h\"\n#include \"chrome/browser/ui/views/chrome_typography_provider.h\"\n#include \"chrome/browser/ui/views/chrome_typography.h\"\n#include \"chrome/browser/ui/views/chrome_layout_provider.h\"\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller_utils.h\"\n#include \"chrome/browser/ui/autofill/autofill_popup_controller.h\"\n#include \"chrome/browser/platform_util.h\"\n#include \"chrome/app/vector_icons/vector_icons.h\"\n#include \"build/build_config.h\"\n#include \"build/branding_buildflags.h\"\n#include \"base/strings/utf_string_conversions.h\"\n#include \"base/memory/raw_ptr.h\"\n#include \"base/feature_list.h\"\n#include \"base/containers/contains.h\"\n#include <utility>\n#include <type_traits>\n#include <string>\n#include <algorithm>\n#include \"chrome/browser/ui/views/autofill/autofill_popup_view_native_views.h\"\n\nAutofillPopupItemView {\n  void AutofillPopupItemView::OnMouseReleased(const ui::MouseEvent& event) {\n    AutofillPopupController* controller = popup_view()->controller();\n    if (controller && event.IsOnlyLeftMouseButton() &&\n        HitTestPoint(event.location())) {\n      controller->AcceptSuggestion(GetLineNumber());\n    }\n  }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n\nCallee: GetLineNumber\nint AutofillPopupRowView::GetLineNumber() const {\n  return line_number_;\n}\n",
+    "sinks": [
+      {
+        "sink_id": "controller->AcceptSuggestion(GetLineNumber())",
+        "sink_description": "Triggers acceptance of an autofill suggestion for the row corresponding to this view when the user releases the left mouse button over the item.",
+        "required_conditions": [
+          {
+            "id": "valid_controller_ptr",
+            "description": "The popup_view() must have a non-null controller pointer before calling AcceptSuggestion.",
+            "locally_satisfied": true,
+            "justification": "The function checks `if (controller && ...)` before dereferencing the controller pointer, ensuring it is non-null."
+          },
+          {
+            "id": "user_initiated_left_click",
+            "description": "The suggestion acceptance must only occur in response to an explicit user left-mouse-button release.",
+            "locally_satisfied": true,
+            "justification": "The code requires `event.IsOnlyLeftMouseButton()` to be true before calling AcceptSuggestion."
+          },
+          {
+            "id": "within_view_bounds",
+            "description": "The mouse release must occur within the bounds of this view to accept the suggestion for this line.",
+            "locally_satisfied": true,
+            "justification": "The code checks `HitTestPoint(event.location())` so the sink is only executed if the event occurred inside the view."
+          }
+        ]
+      }
+    ]
+  }
+]

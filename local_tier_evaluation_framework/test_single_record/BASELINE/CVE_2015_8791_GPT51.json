@@ -1,0 +1,14 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "ReadCodedSizeValue",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2015-8791/repo/src/EbmlElement.cpp",
+      "139-178"
+    ],
+    "function_name": "ReadCodedSizeValue",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ebml/EbmlContexts.h\"\n#include \"ebml/EbmlDummy.h\"\n#include \"ebml/EbmlVoid.h\"\n#include \"ebml/EbmlStream.h\"\n#include \"ebml/EbmlMaster.h\"\n#include \"ebml/EbmlElement.h\"\n#include <cstring>\n#include <cassert>\n\nuint64 ReadCodedSizeValue(const binary * InBuffer, uint32 & BufferSize, uint64 & SizeUnknown)\n{\n  binary SizeBitMask = 1 << 7;\n  uint64 Result = 0x7F;\n  unsigned int SizeIdx, PossibleSizeLength = 0;\n  binary PossibleSize[8];\n  memset(PossibleSize, 0, 8);\n\n  SizeUnknown = 0x7F; // the last bit is discarded when computing the size\n  for (SizeIdx = 0; SizeIdx < BufferSize && SizeIdx < 8; SizeIdx++) {\n    if (InBuffer[0] & (SizeBitMask >> SizeIdx)) {\n      // ID found\n      PossibleSizeLength = SizeIdx + 1;\n      SizeBitMask >>= SizeIdx;\n      for (SizeIdx = 0; SizeIdx < PossibleSizeLength; SizeIdx++) {\n        PossibleSize[SizeIdx] = InBuffer[SizeIdx];\n      }\n      for (SizeIdx = 0; SizeIdx < PossibleSizeLength - 1; SizeIdx++) {\n        Result <<= 7;\n        Result |= 0xFF;\n      }\n\n      Result = 0;\n      Result |= PossibleSize[0] & ~SizeBitMask;\n      for (unsigned int i = 1; i<PossibleSizeLength; i++) {\n        Result <<= 8;\n        Result |= PossibleSize[i];\n      }\n\n      BufferSize = PossibleSizeLength;\n\n      return Result;\n    }\n    SizeUnknown <<= 7;\n    SizeUnknown |= 0xFF;\n  }\n\n  BufferSize = 0;\n  return 0;\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "Vulnerable": false,
+    "Description": "The function ReadCodedSizeValue parses a variable-length encoded size from an input buffer and returns it via its return value while updating BufferSize and SizeUnknown. It does not perform any logging, output, or error reporting, nor does it expose internal system details, file paths, user data, or other sensitive information. All operations are on data already provided via parameters, and there is no indication of unauthorized access or disclosure. Therefore, based solely on the provided code, it does not present a CWE-200 (Information Exposure) vulnerability."
+  }
+]

@@ -270,9 +270,9 @@ class GlobalCallChainBuilder:
 # MAIN
 # -------------------------------------------------------------------------
 def main():
-    CVE = "CVE-2015-8790"
-    repo_name = "repo"
-    repo_path = "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2015-8790/repo/src"
+    CVE = "CVE-2022-40673"
+    repo_name = "src"
+    repo_path = "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2022-40673/repo/src"
     output_path = f"/home/michele/Desktop/ricerca/agents/local_tier_evaluation_framework/call_chains/{CVE}/{repo_name}.json"   #TO-DO = REPONAME
 
     analyzer = CppContextAnalyzer()

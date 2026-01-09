@@ -1,0 +1,14 @@
+[
+  {
+    "file_path": "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2021-4300/repo/src/main.cpp",
+    "id": [
+      "Bind",
+      "/home/michele/Desktop/ricerca/output_repos_cpp/CVE-2018-1281/repo/src/zmq_van.h",
+      "61-79"
+    ],
+    "function_name": "Bind",
+    "contextual_snippet": "MAIN FUNCTION:\n#include \"ps/internal/van.h\"\n#include <string>\n#include <thread>\n#include <stdlib.h>\n#include <zmq.h>\n\nZMQVan {\n  int Bind(const Node& node, int max_retry) override {\n      receiver_ = zmq_socket(context_, ZMQ_ROUTER);\n      CHECK(receiver_ != NULL)\n          << \"create receiver socket failed: \" << zmq_strerror(errno);\n      int local = GetEnv(\"DMLC_LOCAL\", 0);\n      std::string addr = local ? \"ipc:///tmp/\" : \"tcp://*:\";\n      int port = node.port;\n      unsigned seed = static_cast<unsigned>(time(NULL)+port);\n      for (int i = 0; i < max_retry+1; ++i) {\n        auto address = addr + std::to_string(port);\n        if (zmq_bind(receiver_, address.c_str()) == 0) break;\n        if (i == max_retry) {\n          port = -1;\n        } else {\n          port = 10000 + rand_r(&seed) % 40000;\n        }\n      }\n      return port;\n    }\n}\n\n-------- CONTEXTUAL INFORMATIONS - CALLEES CODE --------\n-------- Code of the functions used by the analyzed function -------- \n\n",
+    "Vulnerable": false,
+    "Description": "The function attempts to bind a ZeroMQ ROUTER socket to a port and returns the chosen port number. It does not log or return detailed error messages, system paths, configuration contents, or user data. The only information it exposes is the final port number (or -1 on failure), which is expected behavior for a network-binding routine and not inherently sensitive in this context. No additional internal details (like full addresses, stack traces, or configuration values) are exposed to an unauthorized actor by this function alone."
+  }
+]
