@@ -10,7 +10,7 @@ import os
 import json
 import asyncio
 
-LLM_ENDPOINT = "http://192.168.17.95:21434/v1"
+LLM_ENDPOINT = ""
 
 vulnerabiliry_file_write_lock = asyncio.Lock()
 
