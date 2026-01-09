@@ -7,7 +7,7 @@ from pydantic_ai.providers.ollama import OllamaProvider
 import asyncio
 
 vulnerabiliry_file_write_lock = asyncio.Lock()
-LLM_ENDPOINT = "http://192.168.17.95:21434/v1"
+LLM_ENDPOINT = ""
 
 #----------------------CALL CHAIN AGENT
 ollama_model = OpenAIChatModel(
